@@ -1,0 +1,28 @@
+BasedOnStyle: LLVM
+UseTab: Always            # always emit tabs for indentation
+IndentWidth: 4
+TabWidth: 4
+ContinuationIndentWidth: 4
+BreakBeforeBraces: Allman
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Empty
+AllowShortLoopsOnASingleLine: false
+ColumnLimit: 0            # don't reflow existing long lines
+DerivePointerAlignment: false
+PointerAlignment: Left
+SpaceBeforeParens: ControlStatements
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+AlignTrailingComments: false
+BinPackParameters: false
+BinPackArguments: false
+SortIncludes: false       # avoid reordering current include groups
+NamespaceIndentation: All
+Cpp11BracedListStyle: false
+IndentCaseLabels: true
+AlignAfterOpenBracket: BlockIndent
+KeepEmptyLinesAtTheStartOfBlocks: false
+UseCRLF: false
+ReflowComments: false     # preserve deliberate manual wrapping
+FixNamespaceComments: false

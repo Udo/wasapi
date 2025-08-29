@@ -1,12 +1,49 @@
+# Build directories
+build/
+bin/
+
+# CMake generated files
 CMakeLists.txt.user
 CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
+CMakeFiles/
+CMakeScripts/
+Testing/
 Makefile
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
-_deps
+_deps/
 CMakeUserPresets.json
+
+# IDE files
+.vscode/
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+
+# Compiled binaries
+*.exe
+*.out
+*.app
+
+# Object files
+*.o
+*.obj
+
+# Libraries
+*.lib
+*.a
+*.so
+*.dylib
+*.dll
+
+# Debug files
+*.pdb
+*.ilk
+
+# Other
+.DS_Store
+Thumbs.db
