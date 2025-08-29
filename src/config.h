@@ -36,6 +36,7 @@ struct GlobalConfig
 	double session_cookie_lifetime = 60*60*24*30; // 30 days
 	std::string session_cookie_path = "/";
 	std::string session_storage_path = "/tmp/sessions";
+	bool session_auto_load = true;
 
 	std::string http_cookies_var = "HTTP_COOKIE";
 	std::string http_query_var = "QUERY_STRING";

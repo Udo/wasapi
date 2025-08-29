@@ -24,6 +24,7 @@
 #include "config.h"
 #include "logger.h"
 #include "memory.h"
+#include "session.h"
 #include <functional>
 
 static int set_non_blocking(int fd)
@@ -261,6 +262,16 @@ static void on_request_ready(fcgi::Request& r, std::vector<uint8_t>& out_buf)
 	parse_cookie_header(r, r.env.find(global_config.http_cookies_var));
 	parse_query_string(r, r.env.find(global_config.http_query_var));
 	parse_form_data(r);
+	r.session = DynamicVariable::make_object();
+
+	if (global_config.session_auto_load)
+	{
+		DynamicVariable* sid = r.cookies.find(global_config.session_cookie_name);
+		if (sid && sid->type == DynamicVariable::STRING)
+		{
+			session_start(r);
+		}
+	}
 	r.headers["Content-Type"] = global_config.default_content_type;
 
 	// --------- output ---------
@@ -282,6 +293,9 @@ static void on_request_ready(fcgi::Request& r, std::vector<uint8_t>& out_buf)
 	oss << "-- FILES --\n";
 	print_any_limited(oss, r.files, global_config.print_env_limit, global_config.print_indent);
 
+	oss << "-- SESSION --\n";
+	print_any_limited(oss, r.session, global_config.print_env_limit, global_config.print_indent);
+
 	oss << "\n-- BODY (" << r.body_bytes << " bytes) --\n";
 	size_t preview_cap = global_config.body_preview_limit ? global_config.body_preview_limit : 1024;
 	size_t show = r.body.size() < preview_cap ? r.body.size() : preview_cap;
@@ -299,6 +313,10 @@ static void on_request_ready(fcgi::Request& r, std::vector<uint8_t>& out_buf)
 		oss << "\n[truncated]";
 
 	fcgi::append_stdout_text(out_buf, r.id, oss.str());
+
+	if (!r.session_id.empty())
+		session_save(r);
+
 	fcgi::append_end_request(out_buf, r.id, 0, fcgi::REQUEST_COMPLETE);
 	r.responded = true;
 }
