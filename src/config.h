@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
+#include "dynamic_variable.h"
 
 struct GlobalConfig
 {
@@ -29,6 +30,8 @@ struct GlobalConfig
 	int print_indent = 2;
 	bool pretty_print_params = true;
 	int params_json_depth = -1;
+
+	std::string endpoint_file_path = "SCRIPT_FILENAME";
 
 	std::string default_content_type = "text/plain; charset=utf-8";
 
@@ -55,7 +58,6 @@ extern GlobalConfig global_config;
 
 bool config_parse_args(int argc, char* argv[], std::vector<std::string>& errors);
 
-bool load_kv_file(const std::string& path, std::unordered_map<std::string, std::string>& out,
-				  std::vector<std::string>* errors = nullptr);
+bool load_kv_file(const std::string& path, DynamicVariable& out);
 
 #endif 

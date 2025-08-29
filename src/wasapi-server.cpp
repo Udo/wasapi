@@ -100,7 +100,7 @@ static void print_any_limited(std::ostringstream& oss, const DynamicVariable& v,
 
 void parse_cookie_header(fcgi::Request& r, DynamicVariable* cookie_var)
 {
-	std::string cookie_string = cookie_var ? cookie_var->as<std::string>() : "";
+	std::string cookie_string = cookie_var ? cookie_var->to_string() : "";
 	if (r.cookies.type != DynamicVariable::OBJECT)
 		r.cookies = DynamicVariable::make_object();
 	if (!cookie_string.empty())
@@ -146,7 +146,7 @@ void parse_cookie_header(fcgi::Request& r, DynamicVariable* cookie_var)
 
 void parse_query_string(fcgi::Request& r, DynamicVariable* query_string)
 {
-	std::string qs = query_string ? query_string->as<std::string>() : "";
+	std::string qs = query_string ? query_string->to_string() : "";
 	if (r.params.type != DynamicVariable::OBJECT)
 		r.params = DynamicVariable::make_object();
 	std::unordered_map<std::string, std::string> tmp;
@@ -254,11 +254,20 @@ void output_headers(fcgi::Request& r, std::ostringstream& oss)
 	oss << "\r\n"; // header/body separator
 }
 
+void parse_endpoint_file(fcgi::Request& r, DynamicVariable* file_path)
+{
+	r.context = DynamicVariable::make_object();
+	if (!file_path || file_path->type != DynamicVariable::STRING)
+		return;
+	load_kv_file(file_path->s, r.context);
+}
+
 static void on_request_ready(fcgi::Request& r, std::vector<uint8_t>& out_buf)
 {
 	if (r.responded)
 		return;
 
+	parse_endpoint_file(r, r.env.find(global_config.endpoint_file_path));
 	parse_cookie_header(r, r.env.find(global_config.http_cookies_var));
 	parse_query_string(r, r.env.find(global_config.http_query_var));
 	parse_form_data(r);
@@ -280,6 +289,9 @@ static void on_request_ready(fcgi::Request& r, std::vector<uint8_t>& out_buf)
 
 	oss << "-- ENV --\n";
 	print_any_limited(oss, r.env, global_config.print_env_limit, global_config.print_indent);
+
+	oss << "-- CONTEXT --\n";
+	print_any_limited(oss, r.context, global_config.print_env_limit, global_config.print_indent);
 
 	oss << "-- COOKIES --\n";
 	print_any_limited(oss, r.cookies, global_config.print_env_limit, global_config.print_indent);

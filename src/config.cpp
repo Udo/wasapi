@@ -62,26 +62,22 @@ static inline void trim_inplace(std::string& s)
 	s.assign(s, start, end - start);
 }
 
-bool load_kv_file(const std::string& path, std::unordered_map<std::string, std::string>& out)
+bool load_kv_file(const std::string& path, DynamicVariable& out)
 {
+	if (out.type != DynamicVariable::OBJECT) out = DynamicVariable::make_object();
 	std::ifstream in(path);
-	if (!in)
-	{
-		return false;
-	}
+	if (!in) return false;
 	std::string line;
 	std::string last_key = "undefined";
 	size_t lineno = 0;
 	while (std::getline(in, line))
 	{
 		++lineno;
-		std::string raw = line;
 		std::string key;
 		std::string value;
 		trim_inplace(line);
 		if (line.empty()) continue;
 		if (line[0] == '#' || line[0] == ';') continue;
-		// Find first '='
 		auto eq = line.find('=');
 		if (eq == std::string::npos)
 		{
@@ -95,13 +91,28 @@ bool load_kv_file(const std::string& path, std::unordered_map<std::string, std::
 		}
 		trim_inplace(key);
 		trim_inplace(value);
-		if (out.find(key) == out.end())
+		DynamicVariable* existing = out.find(key);
+		if (!existing)
 		{
-			out[key] = value;
+			out[key] = DynamicVariable::make_string(value);
 		}
 		else
 		{
-			out[key] += "\n" + value;
+			if (existing->type == DynamicVariable::STRING)
+			{
+				std::string prev = existing->s;
+				*existing = DynamicVariable::make_array();
+				existing->push(DynamicVariable::make_string(prev));
+				existing->push(DynamicVariable::make_string(value));
+			}
+			else if (existing->type == DynamicVariable::ARRAY)
+			{
+				existing->push(DynamicVariable::make_string(value));
+			}
+			else
+			{
+				*existing = DynamicVariable::make_string(value);
+			}
 		}
 		last_key = key;
 	}

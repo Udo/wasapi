@@ -2,11 +2,170 @@
 #include <cctype>
 #include <sstream>
 
+DynamicVariable::DynamicVariable() = default;
+
+DynamicVariable::DynamicVariable(const char* lit)
+{
+	if (lit) { type = STRING; s = lit; }
+}
+
+DynamicVariable::DynamicVariable(std::string str)
+{
+	type = STRING; s = std::move(str);
+}
+
+DynamicVariable::DynamicVariable(double v)
+{
+	type = NUMBER; num = v;
+}
+
+DynamicVariable::DynamicVariable(int v)
+{
+	type = NUMBER; num = static_cast<double>(v);
+}
+
+DynamicVariable::DynamicVariable(bool v)
+{
+	type = BOOL; b = v;
+}
+
+DynamicVariable DynamicVariable::make_string(std::string v)
+{
+	DynamicVariable d; d.type = STRING; d.s = std::move(v); return d;
+}
+
+DynamicVariable DynamicVariable::make_number(double v)
+{
+	DynamicVariable d; d.type = NUMBER; d.num = v; return d;
+}
+
+DynamicVariable DynamicVariable::make_bool(bool v)
+{
+	DynamicVariable d; d.type = BOOL; d.b = v; return d;
+}
+
+DynamicVariable DynamicVariable::make_binary(std::vector<uint8_t> v)
+{
+	DynamicVariable d; d.type = BINARY; d.bin = std::move(v); return d;
+}
+
+DynamicVariable DynamicVariable::make_object()
+{
+	DynamicVariable d; d.type = OBJECT; return d;
+}
+
+DynamicVariable DynamicVariable::make_array()
+{
+	DynamicVariable d; d.type = ARRAY; return d;
+}
+
+DynamicVariable DynamicVariable::make_null()
+{
+	return DynamicVariable();
+}
+
+void DynamicVariable::clear()
+{
+	*this = DynamicVariable();
+}
+
+DynamicVariable& DynamicVariable::operator[](const std::string& key)
+{
+	if (type != OBJECT)
+	{
+		clear();
+		type = OBJECT;
+	}
+	return o[key];
+}
+
+DynamicVariable& DynamicVariable::operator=(const std::string& str)
+{
+	type = STRING; s = str; return *this;
+}
+
+DynamicVariable& DynamicVariable::operator=(std::string&& str)
+{
+	type = STRING; s = std::move(str); return *this;
+}
+
+DynamicVariable& DynamicVariable::operator=(const char* lit)
+{
+	type = STRING; s = lit ? lit : ""; return *this;
+}
+
+DynamicVariable& DynamicVariable::operator=(double v)
+{
+	type = NUMBER; num = v; return *this;
+}
+
+DynamicVariable& DynamicVariable::operator=(int v)
+{
+	type = NUMBER; num = static_cast<double>(v); return *this;
+}
+
+DynamicVariable& DynamicVariable::operator=(bool v)
+{
+	type = BOOL; b = v; return *this;
+}
+
+DynamicVariable& DynamicVariable::operator=(std::initializer_list<DynamicVariable> list)
+{
+	type = ARRAY; a.assign(list.begin(), list.end()); return *this;
+}
+
+DynamicVariable* DynamicVariable::find(std::string key)
+{
+	if (type != OBJECT)
+		return nullptr;
+	auto it = o.find(key);
+	return it == o.end() ? nullptr : &it->second;
+}
+
+void DynamicVariable::push(DynamicVariable v)
+{
+	if (type != ARRAY)
+	{
+		if (type == NIL)
+		{
+			type = ARRAY;
+		}
+		else
+			return;
+	}
+	a.push_back(std::move(v));
+}
+
+std::string DynamicVariable::to_string() const
+{
+	switch (type)
+	{
+		case STRING: return s;
+		case NUMBER: return std::to_string(num);
+		case BOOL: return b ? "true" : "false";
+		case NIL: return "";
+		default: return "";
+	}
+}
+
+double DynamicVariable::to_number(double def_value) const
+{
+	return type == NUMBER ? num : def_value;
+}
+
+bool DynamicVariable::to_bool(bool def_value) const
+{
+	if (type == BOOL) return b;
+	if (type == NUMBER) return num != 0.0;
+	return def_value;
+}
+
 struct JsonCursor
 {
 	const std::string* s;
 	size_t i = 0;
 };
+
 void skip_ws(JsonCursor& c)
 {
 	while (c.i < c.s->size() && std::isspace((unsigned char)(*c.s)[c.i]))
