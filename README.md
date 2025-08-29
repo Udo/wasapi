@@ -1,17 +1,5 @@
 # WASAPI Project
 
-A C++ project with CMake build infrastructure.
-
-## Project Structure
-
-```
-├── src/           # Source files (.cpp, .hpp)
-├── bin/           # Built binaries (executables, libraries)
-├── build/         # Intermediate build files
-├── CMakeLists.txt # Main CMake configuration
-└── README.md      # This file
-```
-
 ## Prerequisites
 
 - CMake 3.16 or higher
@@ -22,33 +10,22 @@ A C++ project with CMake build infrastructure.
 ### Debug Build
 
 ```bash
-# Create and enter build directory
 cd build
-
-# Configure the project
 cmake .. -DCMAKE_BUILD_TYPE=Debug
-
-# Build the project
 cmake --build .
 ```
 
 ### Release Build
 
 ```bash
-# Create and enter build directory
 cd build
-
-# Configure the project
 cmake .. -DCMAKE_BUILD_TYPE=Release
-
-# Build the project
 cmake --build .
 ```
 
 ### Clean Build
 
 ```bash
-# Remove build directory and recreate
 rm -rf build
 mkdir build
 cd build
