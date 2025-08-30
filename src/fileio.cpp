@@ -23,7 +23,6 @@ static std::mutex cache_mutex;
 static std::atomic<uint32_t> call_counter{ 0 };
 static size_t total_cache_size = 0;
 
-
 static inline void remove_entry_unlocked(const std::string& filename)
 {
 	auto it = file_cache.find(filename);
@@ -99,7 +98,6 @@ static bool read_file_binary(const std::string& filename, std::string& out, size
 			file.read(&out[0], known_size);
 		return static_cast<bool>(file);
 	}
-	// Fallback (size unknown): original method
 	std::ifstream file(filename, std::ios::binary);
 	if (!file)
 		return false;

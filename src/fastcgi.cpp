@@ -74,7 +74,7 @@ namespace fcgi
 		}
 	}
 
-	ProcessStatus process_buffer(std::vector<uint8_t>& in_buf, std::unordered_map<uint16_t, Request>& requests, std::vector<uint8_t>& out_buf, uint32_t max_in_flight, size_t max_params_bytes, size_t max_stdin_bytes, void (*on_request_ready)(Request&, std::vector<uint8_t>&))
+	ProcessStatus process_buffer(std::vector<uint8_t>& in_buf, std::unordered_map<uint16_t, Request*>& requests, std::vector<uint8_t>& out_buf, Request* (*allocate_request)(uint16_t), size_t max_params_bytes, size_t max_stdin_bytes, void (*on_request_ready)(Request&, std::vector<uint8_t>&), bool& waiting_for_arena)
 	{
 		size_t offset = 0;
 		bool close_needed = false;
@@ -100,14 +100,13 @@ namespace fcgi
 				auto it = requests.find(id);
 				if (it == requests.end())
 				{
-					if (requests.size() >= max_in_flight)
-					{
+					Request* nr = allocate_request ? allocate_request(id) : nullptr;
+					if (!nr)
 						return nullptr;
-					}
-					it = requests.emplace(id, Request{}).first;
-					it->second.id = id;
+					requests[id] = nr;
+					return nr;
 				}
-				return &it->second;
+				return it->second;
 			};
 			Request* rptr = nullptr;
 			switch (h.type)
@@ -124,6 +123,12 @@ namespace fcgi
 							nr->flags |= Request::INITIALIZED;
 							if (br.flags & KEEP_CONN)
 								nr->flags |= Request::KEEP_CONNECTION;
+						}
+						else
+						{
+							waiting_for_arena = true;
+							close_needed = false;
+							goto done; // exit loop keeping entire record intact
 						}
 					}
 					break;
@@ -218,6 +223,7 @@ namespace fcgi
 					on_request_ready(*rptr, out_buf);
 			}
 		}
+	done:
 		if (offset)
 			in_buf.erase(in_buf.begin(), in_buf.begin() + offset);
 		return close_needed ? CLOSE : OK;

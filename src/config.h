@@ -15,12 +15,11 @@ struct GlobalConfig
 	int backlog = 256 * 16;
 
 	size_t arena_capacity = 256 * 1024;
-	size_t workers = 1;
 	size_t output_buffer_initial = 32 * 1024;
 
 	std::string upload_tmp_dir = "/tmp";
 
-	uint32_t max_in_flight = 32;
+	uint32_t max_in_flight = 8;
 	size_t max_params_bytes = 256 * 1024;
 	size_t max_stdin_bytes = 2 * 1024 * 1024;
 	size_t max_memory_per_request = 16 * 1024 * 1024;
@@ -52,8 +51,6 @@ struct GlobalConfig
 
 	int log_level = 1;
 	std::string log_destination = "stderr";
-
-	size_t graceful_shutdown_timeout_ms = 5000;
 };
 
 extern GlobalConfig global_config;

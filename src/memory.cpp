@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 
+ArenaManager global_arena_manager;
+
 Arena::~Arena()
 {
 	std::free(data);
@@ -39,16 +41,29 @@ void* Arena::alloc(size_t sz, size_t align)
 	return ptr;
 }
 
+ArenaManager::~ArenaManager()
+{
+	for (auto* a : arenas)
+		delete a;
+	arenas.clear();
+	in_use.clear();
+	available_count.store(0, std::memory_order_relaxed);
+}
+
 void ArenaManager::create_arenas(size_t count, size_t capacity)
 {
+	for (auto* a : arenas)
+		delete a;
 	arenas.clear();
 	in_use.clear();
 	for (size_t i = 0; i < count; ++i)
 	{
-		arenas.emplace_back(capacity);
-		arenas[i].management_flag = i;
+		Arena* a = new Arena(capacity);
+		a->management_flag = i;
+		arenas.push_back(a);
 		in_use.push_back(false);
 	}
+	available_count.store(count, std::memory_order_relaxed);
 }
 
 Arena* ArenaManager::get()
@@ -59,7 +74,8 @@ Arena* ArenaManager::get()
 		if (!in_use[i])
 		{
 			in_use[i] = true;
-			return &arenas[i];
+			available_count.fetch_sub(1, std::memory_order_relaxed);
+			return arenas[i];
 		}
 	}
 	return nullptr;
@@ -67,8 +83,14 @@ Arena* ArenaManager::get()
 
 void ArenaManager::release(Arena* arena)
 {
+	if (!arena)
+		return;
 	std::lock_guard<std::mutex> lock(mutex);
 	auto i = arena->management_flag;
-	in_use[i] = false;
-	arena->reset();
+	if (i < in_use.size() && in_use[i])
+	{
+		in_use[i] = false;
+		available_count.fetch_add(1, std::memory_order_relaxed);
+		arena->reset();
+	}
 }

@@ -34,8 +34,6 @@ bool config_parse_args(int argc, char* argv[], std::vector<std::string>& errors)
 			 { global_config.max_stdin_bytes = (size_t)std::stoull(v); } },
 		Opt{ "--arena-capacity", true, [](const char* v)
 			 { global_config.arena_capacity = (size_t)std::stoull(v); } },
-		Opt{ "--workers", true, [](const char* v)
-			 { global_config.workers = (size_t)std::stoull(v); } },
 		Opt{ "--output-buffer", true, [](const char* v)
 			 { global_config.output_buffer_initial = (size_t)std::stoull(v); } },
 		Opt{ "--upload-tmp", true, [](const char* v)
@@ -58,8 +56,6 @@ bool config_parse_args(int argc, char* argv[], std::vector<std::string>& errors)
 			 { global_config.log_level = std::stoi(v); } },
 		Opt{ "--log-dest", true, [](const char* v)
 			 { global_config.log_destination = v; } },
-		Opt{ "--graceful-timeout", true, [](const char* v)
-			 { global_config.graceful_shutdown_timeout_ms = (size_t)std::stoull(v); } },
 		Opt{ "--help", false, [](const char*) {} },
 	};
 	auto find_opt = [&](const std::string& a) -> Opt*

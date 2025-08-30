@@ -4,10 +4,11 @@
 file(GLOB_RECURSE SOURCES "*.cpp" "*.c")
 file(GLOB_RECURSE HEADERS "*.h" "*.hpp")
 
-add_executable(wasapi-server wasapi-server.cpp fastcgi.cpp http.cpp dynamic_variable.cpp memory.cpp config.cpp session.cpp request.cpp fileio.cpp)
+add_executable(wasapi-server wasapi-server.cpp fastcgi.cpp fcgi-connection.cpp http.cpp dynamic_variable.cpp memory.cpp config.cpp session.cpp request.cpp fileio.cpp worker.cpp)
 
 target_compile_definitions(wasapi-server PRIVATE _GNU_SOURCE)
-target_link_libraries(wasapi-server PRIVATE)
+find_package(Threads REQUIRED)
+target_link_libraries(wasapi-server PRIVATE Threads::Threads)
 
 # If you have additional libraries or modules, you can add them here
 # Example:

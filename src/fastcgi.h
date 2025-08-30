@@ -78,7 +78,8 @@ namespace fcgi
 		OK = 0,
 		CLOSE = 1
 	};
-	ProcessStatus process_buffer(std::vector<uint8_t>& in_buf, std::unordered_map<uint16_t, Request>& requests, std::vector<uint8_t>& out_buf, uint32_t max_in_flight, size_t max_params_bytes, size_t max_stdin_bytes, void (*on_request_ready)(Request&, std::vector<uint8_t>& out_buf));
+
+	ProcessStatus process_buffer(std::vector<uint8_t>& in_buf, std::unordered_map<uint16_t, Request*>& requests, std::vector<uint8_t>& out_buf, Request* (*allocate_request)(uint16_t), size_t max_params_bytes, size_t max_stdin_bytes, void (*on_request_ready)(Request&, std::vector<uint8_t>& out_buf), bool& waiting_for_arena);
 
 	void append_record(std::vector<uint8_t>& out, uint8_t type, uint16_t reqId, const uint8_t* data, uint16_t len);
 	void append_stdout_text(std::vector<uint8_t>& out, uint16_t reqId, const std::string& body);
