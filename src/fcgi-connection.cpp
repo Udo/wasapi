@@ -1,6 +1,7 @@
 #include "fcgi-connection.h"
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -36,8 +37,8 @@ namespace fcgi_conn
 	{
 		int fd = -1;
 		std::vector<uint8_t> in_buf;
-		std::vector<uint8_t> out_buf; // outbound data buffer
-		size_t out_pos = 0; // bytes already sent from start of out_buf
+		std::vector<uint8_t> out_buf; // outbound data buffer (IO thread only)
+		size_t out_pos = 0; // bytes already sent from start of out_buf (IO thread only)
 		std::unordered_map<uint16_t, Request*> requests; // managed via arenas
 		std::atomic<bool> closed{ false }; // accessed from IO + worker threads
 		enum State
@@ -48,7 +49,6 @@ namespace fcgi_conn
 		} state = ACTIVE;
 		bool waiting_for_arena = false; // BEGIN_REQUEST record deferred (legacy helper flag)
 		bool in_wait_queue = false; // listed in g_waiting_conns
-		std::mutex out_mutex; // protect out_buf/out_pos
 		std::atomic<int> active_workers{ 0 };
 		uint32_t epoll_mask = EPOLLIN | EPOLLET; // currently registered interest mask
 		bool want_write_interest = false; // desired EPOLLOUT interest
@@ -61,6 +61,9 @@ namespace fcgi_conn
 	static std::deque<int> g_waiting_conns; // existing connections blocked on arena
 	static int g_timerfd = -1; // periodic housekeeping timer
 	static std::vector<int> g_close_queue; // deferred closes
+	static std::vector<Request*> g_pending_output; // requests ready for output assembly
+	static std::mutex g_pending_output_mutex; // protects g_pending_output
+	static int g_eventfd = -1; // signals IO thread about pending work
 	static Request* allocate_request(uint16_t id);
 	static void flush_connection(Connection& c, int epfd);
 	static void internal_on_request_ready(Request& r, std::vector<uint8_t>& out_buf);
@@ -129,21 +132,21 @@ namespace fcgi_conn
 
 	static void housekeeping_close_idle(int epfd)
 	{
-		// Iterate over connections and close those eligible; collect fds first to avoid iterator invalidation.
 		std::vector<int> to_close;
 		to_close.reserve(g_conns.size());
-		for (auto &kv : g_conns)
+		for (auto& kv : g_conns)
 		{
-			Connection &c = kv.second;
+			Connection& c = kv.second;
 			if (should_close_connection(c))
 				to_close.push_back(kv.first);
 		}
 		for (int fd : to_close)
 		{
 			auto it = g_conns.find(fd);
-			if (it == g_conns.end()) continue;
-			Connection &c = it->second;
-			for (auto &rk : c.requests)
+			if (it == g_conns.end())
+				continue;
+			Connection& c = it->second;
+			for (auto& rk : c.requests)
 			{
 				if (rk.second)
 				{
@@ -165,7 +168,7 @@ namespace fcgi_conn
 
 	static void internal_on_request_ready(Request& r, std::vector<uint8_t>& out_buf)
 	{
-		(void)out_buf; // worker thread now manages output
+		(void)out_buf; // unused - output assembly now happens on IO thread
 		if (r.flags & Request::RESPONDED)
 			return;
 
@@ -189,40 +192,33 @@ namespace fcgi_conn
 		Connection* c = static_cast<Connection*>(r.conn_ptr);
 		if (!c)
 			return;
+
 		c->active_workers.fetch_add(1, std::memory_order_relaxed);
 		r.worker_active.store(true, std::memory_order_release);
+
 		::global_worker_pool.enqueue([&r, c]
 									 {
-		if (c->closed.load(std::memory_order_relaxed) && c->active_workers.load(std::memory_order_relaxed) == 0)
+			if (c->closed.load(std::memory_order_relaxed) && c->active_workers.load(std::memory_order_relaxed) == 0)
 			{
 				r.worker_active.store(false, std::memory_order_release);
 				c->active_workers.fetch_sub(1, std::memory_order_relaxed);
 				return;
 			}
+			
 			if (!(r.flags & Request::RESPONDED))
 			{
-				tls_current_connection = c;
-				std::vector<uint8_t> local_out; local_out.reserve(1024);
-				if (g_user_request_ready)
-					g_user_request_ready(r, local_out);
-				bool added = false;
-										if (!local_out.empty() && !c->closed.load(std::memory_order_relaxed))
-				{
-					std::lock_guard<std::mutex> lk(c->out_mutex);
-					bool was_empty = (c->out_pos == c->out_buf.size());
-					c->out_buf.insert(c->out_buf.end(), local_out.begin(), local_out.end());
-					added = was_empty;
-				}
-				tls_current_connection = nullptr;
-										if (added && g_epfd != -1 && !c->closed.load(std::memory_order_relaxed))
-				{
-					if (!c->want_write_interest)
-					{
-						maybe_update_epoll(*c, g_epfd, EPOLLIN | EPOLLOUT | EPOLLET);
-						c->want_write_interest = true;
+				if (!c->closed.load(std::memory_order_relaxed)) {
+					std::lock_guard<std::mutex> lk(g_pending_output_mutex);
+					g_pending_output.push_back(&r);
+					
+					if (g_eventfd != -1) {
+						uint64_t val = 1;
+						ssize_t ret = write(g_eventfd, &val, sizeof(val));
+						(void)ret; // suppress unused variable warning
 					}
 				}
 			}
+			
 			r.worker_active.store(false, std::memory_order_release);
 			c->active_workers.fetch_sub(1, std::memory_order_relaxed); });
 	}
@@ -232,10 +228,57 @@ namespace fcgi_conn
 		log_error("%s: %s", msg, std::strerror(errno));
 	}
 
+	static void process_pending_output()
+	{
+		std::vector<Request*> pending;
+		{
+			std::lock_guard<std::mutex> lk(g_pending_output_mutex);
+			pending.swap(g_pending_output);
+		}
+
+		for (Request* r : pending)
+		{
+			if (!r || (r->flags & Request::RESPONDED))
+				continue;
+
+			Connection* c = static_cast<Connection*>(r->conn_ptr);
+			if (!c || c->closed.load(std::memory_order_relaxed))
+				continue;
+
+			std::vector<uint8_t> local_out;
+			local_out.reserve(1024);
+
+			if (g_user_request_ready)
+			{
+				tls_current_connection = c;
+				g_user_request_ready(*r, local_out);
+				tls_current_connection = nullptr;
+			}
+
+			if (!local_out.empty())
+			{
+				bool was_empty = (c->out_pos == c->out_buf.size());
+				c->out_buf.insert(c->out_buf.end(), local_out.begin(), local_out.end());
+
+				if (was_empty && g_epfd != -1)
+				{
+					if (!c->want_write_interest)
+					{
+						maybe_update_epoll(*c, g_epfd, EPOLLIN | EPOLLOUT | EPOLLET);
+						c->want_write_interest = true;
+					}
+				}
+			}
+		}
+	}
+
 	static void maybe_update_epoll(Connection& c, int epfd, uint32_t desired)
 	{
-		if (desired == c.epoll_mask) return;
-		epoll_event ev{}; ev.data.fd = c.fd; ev.events = desired;
+		if (desired == c.epoll_mask)
+			return;
+		epoll_event ev{};
+		ev.data.fd = c.fd;
+		ev.events = desired;
 		epoll_ctl(epfd, EPOLL_CTL_MOD, c.fd, &ev);
 		c.epoll_mask = desired;
 	}
@@ -245,31 +288,28 @@ namespace fcgi_conn
 		while (true)
 		{
 			ssize_t n = 0;
+			size_t remaining = c.out_pos < c.out_buf.size() ? (c.out_buf.size() - c.out_pos) : 0;
+			if (remaining == 0)
 			{
-				std::lock_guard<std::mutex> lk(c.out_mutex);
-				size_t remaining = c.out_pos < c.out_buf.size() ? (c.out_buf.size() - c.out_pos) : 0;
-				if (remaining == 0)
+				if (c.want_write_interest)
 				{
-					if (c.want_write_interest)
-					{
-						maybe_update_epoll(c, epfd, EPOLLIN | EPOLLET);
-						c.want_write_interest = false;
-					}
-					if (c.out_pos != 0)
-					{
-						c.out_buf.clear();
-						c.out_pos = 0;
-					}
-					if (should_close_connection(c))
-						g_close_queue.push_back(c.fd);
-					return;
+					maybe_update_epoll(c, epfd, EPOLLIN | EPOLLET);
+					c.want_write_interest = false;
 				}
-				n = ::send(c.fd, c.out_buf.data() + c.out_pos, remaining, 0);
-				if (n > 0)
+				if (c.out_pos != 0)
 				{
-					c.out_pos += (size_t)n;
-					continue; // keep draining
+					c.out_buf.clear();
+					c.out_pos = 0;
 				}
+				if (should_close_connection(c))
+					g_close_queue.push_back(c.fd);
+				return;
+			}
+			n = ::send(c.fd, c.out_buf.data() + c.out_pos, remaining, 0);
+			if (n > 0)
+			{
+				c.out_pos += (size_t)n;
+				continue; // keep draining
 			}
 			if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
 			{
@@ -529,7 +569,7 @@ namespace fcgi_conn
 			}
 
 			if (c.out_pos != c.out_buf.size())
-						flush_connection(c, epfd);
+				flush_connection(c, epfd);
 		}
 
 		if (events & EPOLLOUT)
@@ -565,14 +605,17 @@ namespace fcgi_conn
 
 		if (!g_close_queue.empty())
 		{
-			std::vector<int> local; local.swap(g_close_queue);
+			std::vector<int> local;
+			local.swap(g_close_queue);
 			for (int cfd : local)
 			{
 				auto itc = g_conns.find(cfd);
-				if (itc == g_conns.end()) continue;
-				Connection &cc = itc->second;
-				if (!should_close_connection(cc)) continue;
-				for (auto &rk : cc.requests)
+				if (itc == g_conns.end())
+					continue;
+				Connection& cc = itc->second;
+				if (!should_close_connection(cc))
+					continue;
+				for (auto& rk : cc.requests)
 				{
 					if (rk.second)
 					{
@@ -664,6 +707,21 @@ namespace fcgi_conn
 			return 1;
 		}
 		g_epfd = epfd; // publish for worker wakeups
+
+		g_eventfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+		if (g_eventfd != -1)
+		{
+			epoll_event efd_ev{};
+			efd_ev.data.fd = g_eventfd;
+			efd_ev.events = EPOLLIN | EPOLLET;
+			if (epoll_ctl(epfd, EPOLL_CTL_ADD, g_eventfd, &efd_ev) == -1)
+			{
+				log_errno("epoll_ctl eventfd");
+				::close(g_eventfd);
+				g_eventfd = -1;
+			}
+		}
+
 		epoll_event ev{};
 		ev.data.fd = listen_fd;
 		ev.events = EPOLLIN | EPOLLET;
@@ -674,23 +732,29 @@ namespace fcgi_conn
 			g_epfd = -1;
 			return 1;
 		}
-		// Setup periodic timer to ensure progress for waiting connections (100ms interval)
 		g_timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
 		if (g_timerfd != -1)
 		{
-			itimerspec its{}; its.it_interval.tv_sec = 0; its.it_interval.tv_nsec = 100 * 1000 * 1000; its.it_value = its.it_interval; // first fire after 100ms
+			itimerspec its{};
+			its.it_interval.tv_sec = 0;
+			its.it_interval.tv_nsec = 100 * 1000 * 1000;
+			its.it_value = its.it_interval; // first fire after 100ms
 			if (timerfd_settime(g_timerfd, 0, &its, nullptr) == -1)
 			{
 				log_errno("timerfd_settime");
-				::close(g_timerfd); g_timerfd = -1;
+				::close(g_timerfd);
+				g_timerfd = -1;
 			}
 			else
 			{
-				epoll_event tev{}; tev.data.fd = g_timerfd; tev.events = EPOLLIN | EPOLLET;
+				epoll_event tev{};
+				tev.data.fd = g_timerfd;
+				tev.events = EPOLLIN | EPOLLET;
 				if (epoll_ctl(epfd, EPOLL_CTL_ADD, g_timerfd, &tev) == -1)
 				{
 					log_errno("epoll_ctl timerfd");
-					::close(g_timerfd); g_timerfd = -1;
+					::close(g_timerfd);
+					g_timerfd = -1;
 				}
 			}
 		}
@@ -712,9 +776,18 @@ namespace fcgi_conn
 				uint32_t evs = events[i].events;
 				if (fd == listen_fd)
 					handle_new_connections(listen_fd, epfd);
+				else if (fd == g_eventfd)
+				{
+					uint64_t val;
+					ssize_t ret = ::read(g_eventfd, &val, sizeof(val)); // drain eventfd
+					(void)ret; // suppress unused variable warning
+					process_pending_output();
+				}
 				else if (fd == g_timerfd)
 				{
-					uint64_t expirations; ::read(g_timerfd, &expirations, sizeof(expirations));
+					uint64_t expirations;
+					ssize_t ret = ::read(g_timerfd, &expirations, sizeof(expirations));
+					(void)ret; // suppress unused variable warning
 					retry_waiting(epfd);
 					housekeeping_close_idle(epfd);
 				}
@@ -724,7 +797,16 @@ namespace fcgi_conn
 		}
 		::close(epfd);
 		g_epfd = -1;
-		if (g_timerfd != -1) { ::close(g_timerfd); g_timerfd = -1; }
+		if (g_eventfd != -1)
+		{
+			::close(g_eventfd);
+			g_eventfd = -1;
+		}
+		if (g_timerfd != -1)
+		{
+			::close(g_timerfd);
+			g_timerfd = -1;
+		}
 		return 0;
 	}
 

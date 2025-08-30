@@ -1,6 +1,32 @@
 #include "dynamic_variable.h"
+#include "memory.h"
 #include <cctype>
 #include <sstream>
+
+DynamicString::DynamicString(Arena* a)
+{
+	arena = a;
+	reserve(32);
+}
+
+DynamicString::~DynamicString() // we don't need to free anything since this is intended to work with an arena
+{
+}
+
+bool DynamicString::reserve(size_t sz)
+{
+	if (sz > capacity)
+	{
+		void* new_data = arena->alloc(sz);
+		if(!new_data)
+			return false;
+		if (data)
+			memccpy(new_data, data, 1, capacity);
+		data = new_data;
+		capacity = sz;
+	}
+	return true;
+}
 
 DynamicVariable::DynamicVariable() = default;
 

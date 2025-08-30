@@ -6,6 +6,21 @@
 #include <vector>
 #include <cstdint>
 #include <type_traits>
+#include "memory.h"
+
+struct DynamicString
+{
+	Arena* arena = nullptr;
+	void* data = nullptr;
+	size_t length = 0;
+	size_t capacity = 0;
+
+	DynamicString(Arena* a);
+	~DynamicString();
+	bool reserve(size_t sz);
+
+	
+};
 
 struct DynamicVariable
 {

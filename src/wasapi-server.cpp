@@ -38,6 +38,7 @@ static void on_request_ready(Request& r, std::vector<uint8_t>& out_buf)
 	std::ostringstream oss;
 	output_headers(r, oss);
 
+	r.env["DBG_ARENA_ALLOC"] = DynamicVariable::make_number(r.arena->offset);
 	oss << "-- ENV --\n";
 	print_any_limited(oss, r.env, global_config.print_env_limit, global_config.print_indent);
 
