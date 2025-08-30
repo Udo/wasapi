@@ -4,16 +4,16 @@
 #include <string>
 #include "dynamic_variable.h"
 #include "config.h"
-#include "fastcgi.h"
+#include "request.h"
 
-std::string session_get_id(fcgi::Request& r, bool create);
+std::string session_get_id(Request& r, bool create);
 
-bool session_start(fcgi::Request& r);
+bool session_start(Request& r);
 
-bool session_load(fcgi::Request& r);
+bool session_load(Request& r);
 
-bool session_save(fcgi::Request& r);
+bool session_save(Request& r);
 
-bool session_clear(fcgi::Request& r);
+bool session_clear(Request& r);
 
 #endif

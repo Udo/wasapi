@@ -25,6 +25,7 @@
 #include "logger.h"
 #include "memory.h"
 #include "session.h"
+#include "request.h"
 #include <functional>
 
 static int set_non_blocking(int fd)
@@ -47,7 +48,7 @@ struct Connection
 	int fd = -1;
 	std::vector<uint8_t> in_buf;
 	std::vector<uint8_t> out_buf;
-	std::unordered_map<uint16_t, fcgi::Request> requests; 
+	std::unordered_map<uint16_t, Request> requests; 
 	bool closed = false;
 };
 
@@ -57,33 +58,32 @@ static void print_any_limited(std::ostringstream& oss, const DynamicVariable& v,
 	switch (v.type)
 	{
 		case DynamicVariable::NIL: oss << "null\n"; break;
-		case DynamicVariable::STRING: oss << '"' << v.s << '"' << "\n"; break;
-		case DynamicVariable::NUMBER: oss << v.num << "\n"; break;
-		case DynamicVariable::BOOL: oss << (v.b?"true":"false") << "\n"; break;
-		case DynamicVariable::BINARY: oss << "<binary:" << v.bin.size() << ">\n"; break;
+		case DynamicVariable::STRING: oss << '"' << v.data.s << '"' << "\n"; break;
+		case DynamicVariable::NUMBER: oss << v.data.num << "\n"; break;
+		case DynamicVariable::BOOL: oss << (v.data.b?"true":"false") << "\n"; break;
 		case DynamicVariable::ARRAY:
 			oss << "[\n";
-			if (!v.a.empty())
+			if (!v.data.a.empty())
 			{
 				size_t printed = 0;
-				for (size_t i = 0; i < v.a.size(); ++i)
+				for (size_t i = 0; i < v.data.a.size(); ++i)
 				{
 					if (limit && printed >= limit)
 					{
 						ind(depth+1); oss << "... (truncated)\n"; break;
 					}
 					ind(depth+1);
-					print_any_limited(oss, v.a[i], 0, indent, depth+1);
+					print_any_limited(oss, v.data.a[i], 0, indent, depth+1);
 					++printed;
 				}
 			}
 			ind(depth); oss << "]\n"; break;
 		case DynamicVariable::OBJECT:
 			oss << "{\n";
-			if (!v.o.empty())
+			if (!v.data.o.empty())
 			{
 				size_t printed = 0;
-				for (auto it = v.o.begin(); it != v.o.end(); ++it)
+				for (auto it = v.data.o.begin(); it != v.data.o.end(); ++it)
 				{
 					if (limit && printed >= limit)
 					{
@@ -98,7 +98,7 @@ static void print_any_limited(std::ostringstream& oss, const DynamicVariable& v,
 	}
 }
 
-void parse_cookie_header(fcgi::Request& r, DynamicVariable* cookie_var)
+void parse_cookie_header(Request& r, DynamicVariable* cookie_var)
 {
 	std::string cookie_string = cookie_var ? cookie_var->to_string() : "";
 	if (r.cookies.type != DynamicVariable::OBJECT)
@@ -144,7 +144,7 @@ void parse_cookie_header(fcgi::Request& r, DynamicVariable* cookie_var)
 	}
 }
 
-void parse_query_string(fcgi::Request& r, DynamicVariable* query_string)
+void parse_query_string(Request& r, DynamicVariable* query_string)
 {
 	std::string qs = query_string ? query_string->to_string() : "";
 	if (r.params.type != DynamicVariable::OBJECT)
@@ -155,18 +155,17 @@ void parse_query_string(fcgi::Request& r, DynamicVariable* query_string)
 		r.params[kv.first] = DynamicVariable::make_string(kv.second);
 }
 
-void parse_json_form_data(fcgi::Request& r)
+void parse_json_form_data(Request& r)
 {
-	std::string body_str(reinterpret_cast<const char*>(r.body.data()), r.body.size());
 	DynamicVariable parsed;
 	size_t errpos = 0;
-	if (parse_json(body_str, parsed, &errpos))
+	if (parse_json(r.body, parsed, &errpos))
 	{
 		if (parsed.type == DynamicVariable::OBJECT)
 		{
 			if (r.params.type != DynamicVariable::OBJECT)
 				r.params = DynamicVariable::make_object();
-			for (auto& kv : parsed.o)
+			for (auto& kv : parsed.data.o)
 				r.params[kv.first] = kv.second;
 		}
 		else
@@ -184,12 +183,11 @@ void parse_json_form_data(fcgi::Request& r)
 	}
 }
 
-void parse_multipart_form_data(fcgi::Request& r)
+void parse_multipart_form_data(Request& r)
 {
-	std::string body_str(reinterpret_cast<const char*>(r.body.data()), r.body.size());
 	const DynamicVariable* it_ct = r.env.find("CONTENT_TYPE");
 	if (!it_ct || it_ct->type != DynamicVariable::STRING) return;
-	std::string ct = it_ct->s;
+	std::string ct = it_ct->data.s;
 	std::string lct = ct; for (auto& c : lct) c = std::tolower(c);
 	std::string boundary;
 	std::string key = "boundary=";
@@ -200,28 +198,27 @@ void parse_multipart_form_data(fcgi::Request& r)
 		boundary = boundary.substr(1, boundary.size() - 2);
 	if (boundary.empty()) return;
 	std::unordered_map<std::string, std::string> tmp;
-	parse_multipart_formdata(body_str, boundary, global_config.upload_tmp_dir, tmp, r.files);
+	extract_files_from_formdata(r.body, boundary, global_config.upload_tmp_dir, tmp, r.files);
 	r.params.type = DynamicVariable::OBJECT;
 	for (auto& kv : tmp)
 		r.params[kv.first] = DynamicVariable::make_string(kv.second);
 }
 
-void parse_urlencoded_form_data(fcgi::Request& r)
+void parse_urlencoded_form_data(Request& r)
 {
-	std::string body_str(reinterpret_cast<const char*>(r.body.data()), r.body.size());
 	std::unordered_map<std::string, std::string> tmp;
-	parse_query_string(body_str, tmp);
+	parse_query_string(r.body, tmp);
 	r.params.type = DynamicVariable::OBJECT;
 	for (auto& kv : tmp)
 		r.params[kv.first] = DynamicVariable::make_string(kv.second);
 }
 
-void parse_form_data(fcgi::Request& r)
+void parse_form_data(Request& r)
 {
 	const DynamicVariable* it_ct = r.env.find("CONTENT_TYPE");
 	if (!it_ct || it_ct->type != DynamicVariable::STRING)
 		return;
-	std::string ct = it_ct->s;
+	std::string ct = it_ct->data.s;
 	std::string lct = ct; for (auto& c : lct) c = std::tolower(c);
 	if (lct.find("application/json") != std::string::npos)
 	{
@@ -237,14 +234,14 @@ void parse_form_data(fcgi::Request& r)
 	}
 }
 
-void output_headers(fcgi::Request& r, std::ostringstream& oss)
+void output_headers(Request& r, std::ostringstream& oss)
 {
-	for (auto& kv : r.headers.o)
+	for (auto& kv : r.headers.data.o)
 	{
 		if (kv.second.type == DynamicVariable::STRING)
 		{
 			std::string lname = kv.first; for (auto& c : lname) c = std::tolower(c);
-			oss << kv.first << ": " << kv.second.s << "\r\n";
+			oss << kv.first << ": " << kv.second.data.s << "\r\n";
 		}
 		else
 		{
@@ -254,19 +251,20 @@ void output_headers(fcgi::Request& r, std::ostringstream& oss)
 	oss << "\r\n"; // header/body separator
 }
 
-void parse_endpoint_file(fcgi::Request& r, DynamicVariable* file_path)
+void parse_endpoint_file(Request& r, DynamicVariable* file_path)
 {
 	r.context = DynamicVariable::make_object();
 	if (!file_path || file_path->type != DynamicVariable::STRING)
 		return;
-	load_kv_file(file_path->s, r.context);
+	load_kv_file(file_path->data.s, r.context);
 }
 
-static void on_request_ready(fcgi::Request& r, std::vector<uint8_t>& out_buf)
+static void on_request_ready(Request& r, std::vector<uint8_t>& out_buf)
 {
-	if (r.responded)
+	if (r.flags & Request::RESPONDED)
 		return;
 
+	r.files = DynamicVariable::make_array();
 	parse_endpoint_file(r, r.env.find(global_config.endpoint_file_path));
 	parse_cookie_header(r, r.env.find(global_config.http_cookies_var));
 	parse_query_string(r, r.env.find(global_config.http_query_var));
@@ -330,7 +328,7 @@ static void on_request_ready(fcgi::Request& r, std::vector<uint8_t>& out_buf)
 		session_save(r);
 
 	fcgi::append_end_request(out_buf, r.id, 0, fcgi::REQUEST_COMPLETE);
-	r.responded = true;
+	r.flags |= Request::RESPONDED;
 }
 
 static void flush_connection(Connection& c, int epfd)
@@ -442,22 +440,12 @@ static void usage(const char* prog)
 	std::fprintf(stderr, "Usage: %s [options]\n\n"
 						 "Options:\n"
 						 "  --port N                TCP port (default 9000)\n"
-						 "  --unix PATH             UNIX socket path instead of TCP\n"
-						 "  --backlog N             listen backlog (default 128)\n"
-						 "  --max-in-flight N       per-connection FastCGI request cap\n"
-						 "  --max-params BYTES      max PARAMS bytes per request\n"
-						 "  --max-stdin BYTES       max STDIN bytes per request\n"
-						 "  --arena-capacity BYTES  arena capacity per request (default 262144)\n"
-						 "  --workers N             number of worker arenas (default 1)\n"
-						 "  --output-buffer BYTES   initial output buffer reserve (default 32768)\n"
-						 "  --upload-tmp DIR        directory for uploaded multipart temp files\n"
-						 "  --help                  show this help\n",
+						 "  --unix PATH             UNIX socket path instead of TCP\n",
 				 prog);
 }
 
-int main(int argc, char* argv[])
+static bool initialize_server_config(int argc, char* argv[])
 {
-	auto& G = global_config;
 	std::vector<std::string> errors;
 	if (!config_parse_args(argc, argv, errors))
 	{
@@ -467,51 +455,238 @@ int main(int argc, char* argv[])
 				std::fprintf(stderr, "%s\n", e.c_str());
 		}
 		usage(argv[0]);
-		if (!errors.empty())
-			return 1;
-		else
-			return 0;
+		return false;
 	}
+	return true;
+}
 
+static void setup_signal_handlers()
+{
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
+}
+
+static void handle_new_connections(int listen_fd, int epfd, std::unordered_map<int, Connection>& conns)
+{
+	while (true)
+	{
+		sockaddr_storage ss;
+		socklen_t slen = sizeof(ss);
+		int cfd = ::accept(listen_fd, (sockaddr*)&ss, &slen);
+		if (cfd == -1)
+		{
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				break;
+			else
+			{
+				log_errno("accept");
+				break;
+			}
+		}
+		set_non_blocking(cfd);
+		epoll_event cev{};
+		cev.data.fd = cfd;
+		cev.events = EPOLLIN | EPOLLET;
+		epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev);
+		Connection c;
+		c.fd = cfd;
+		c.out_buf.reserve(global_config.output_buffer_initial);
+		log_debug("Accepted fd=%d", cfd);
+		conns.emplace(cfd, std::move(c));
+	}
+}
+
+static void cleanup_uploaded_files(Connection& c)
+{
+	for (auto& kv : c.requests)
+	{
+		auto& req = kv.second;
+		if ((req.flags & Request::RESPONDED) && req.files.type == DynamicVariable::ARRAY && !req.files.data.a.empty())
+		{
+			for (auto& f : req.files.data.a)
+			{
+				if (f.type != DynamicVariable::OBJECT) continue;
+				DynamicVariable* tp = f.find("temp_path");
+				if (!global_config.keep_uploaded_files && tp && tp->type == DynamicVariable::STRING && !tp->data.s.empty())
+				{
+					::unlink(tp->data.s.c_str());
+					tp->data.s.clear();
+				}
+			}
+			req.files = DynamicVariable::make_array();
+		}
+	}
+}
+
+static bool should_close_connection(Connection& c)
+{
+	if (c.closed)
+		return true;
+	
+	bool all_responded = true;
+	for (auto& kv : c.requests)
+	{
+		if (!(kv.second.flags & Request::RESPONDED))
+		{
+			all_responded = false;
+			break;
+		}
+	}
+	
+	bool any_keep = false;
+	for (auto& kv : c.requests)
+	{
+		if (kv.second.flags & Request::KEEP_CONNECTION)
+		{
+			any_keep = true;
+			break;
+		}
+	}
+	
+	return all_responded && !any_keep && c.out_buf.empty();
+}
+
+static void handle_connection_io(int fd, uint32_t events, int epfd, std::unordered_map<int, Connection>& conns)
+{
+	auto it = conns.find(fd);
+	if (it == conns.end())
+		return;
+	
+	Connection& c = it->second;
+	auto& G = global_config;
+	
+	if (events & (EPOLLHUP | EPOLLERR))
+	{
+		c.closed = true;
+	}
+	
+	if (events & EPOLLIN)
+	{
+		while (true)
+		{
+			uint8_t buf[4096];
+			ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
+			if (r > 0)
+			{
+				c.in_buf.insert(c.in_buf.end(), buf, buf + r);
+			}
+			else if (r == 0)
+			{
+				c.closed = true;
+				break;
+			}
+			else
+			{
+				if (errno == EAGAIN || errno == EWOULDBLOCK)
+					break;
+				else
+				{
+					log_errno("recv");
+					c.closed = true;
+					break;
+				}
+			}
+		}
+		
+		if (!c.closed)
+		{
+			auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, G.max_in_flight, G.max_params_bytes, G.max_stdin_bytes, on_request_ready);
+			if (status == fcgi::CLOSE)
+				c.closed = true;
+		}
+		
+		if (!c.out_buf.empty())
+			flush_connection(c, epfd);
+		
+		cleanup_uploaded_files(c);
+	}
+	
+	if (events & EPOLLOUT)
+	{
+		if (!c.out_buf.empty())
+			flush_connection(c, epfd);
+	}
+	
+	if (should_close_connection(c))
+	{
+		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
+		::close(fd);
+		log_debug("Closed fd=%d", fd);
+		conns.erase(it);
+	}
+}
+
+static uint64_t get_current_time_ms()
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return (uint64_t)ts.tv_sec * 1000ULL + ts.tv_nsec / 1000000ULL;
+}
+
+static void cleanup_server_resources(int listen_fd, int epfd, std::unordered_map<int, Connection>& conns)
+{
+	for (auto& kv : conns)
+	{
+		::close(kv.first);
+	}
+	::close(listen_fd);
+	::close(epfd);
+	if (!global_config.unix_path.empty())
+		::unlink(global_config.unix_path.c_str());
+	log_info("fastcgi-dump-server shutdown.");
+}
+
+int main(int argc, char* argv[])
+{
+	if (!initialize_server_config(argc, argv))
+	{
+		return 1;
+	}
+
+	setup_signal_handlers();
 
 	int listen_fd = create_listen_socket();
 	if (listen_fd == -1)
 		return 1;
+	
 	int epfd = epoll_create1(0);
 	if (epfd == -1)
 	{
 		log_errno("epoll_create1");
+		::close(listen_fd);
 		return 1;
 	}
+	
 	epoll_event ev{};
 	ev.data.fd = listen_fd;
 	ev.events = EPOLLIN | EPOLLET;
 	if (epoll_ctl(epfd, EPOLL_CTL_ADD, listen_fd, &ev) == -1)
 	{
 		log_errno("epoll_ctl listen");
+		::close(listen_fd);
+		::close(epfd);
 		return 1;
 	}
-	log_info("fastcgi-dump-server listening on %s", G.unix_path.empty() ? ("tcp:" + std::to_string(G.port)).c_str() : G.unix_path.c_str());
+	
+	auto& G = global_config;
+	log_info("server listening on %s", G.unix_path.empty() ? ("tcp:" + std::to_string(G.port)).c_str() : G.unix_path.c_str());
 
 	std::unordered_map<int, Connection> conns;
-
 	const int MAX_EVENTS = 64;
 	std::vector<epoll_event> events(MAX_EVENTS);
 	uint64_t start_shutdown_ms = 0;
-	auto now_ms = []()
-	{ struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); return (uint64_t)ts.tv_sec*1000ULL + ts.tv_nsec/1000000ULL; };
+
 	while (true)
 	{
 		if (g_stop)
 		{
 			if (!start_shutdown_ms)
-				start_shutdown_ms = now_ms();
-			uint64_t elapsed = now_ms() - start_shutdown_ms;
+				start_shutdown_ms = get_current_time_ms();
+			uint64_t elapsed = get_current_time_ms() - start_shutdown_ms;
 			if (conns.empty() || elapsed > G.graceful_shutdown_timeout_ms)
-				break; // exit loop
+				break;
 		}
+
 		int n = epoll_wait(epfd, events.data(), MAX_EVENTS, 1000);
 		if (n == -1)
 		{
@@ -520,143 +695,23 @@ int main(int argc, char* argv[])
 			log_errno("epoll_wait");
 			break;
 		}
+
 		for (int i = 0; i < n; i++)
 		{
 			int fd = events[i].data.fd;
 			uint32_t evs = events[i].events;
+			
 			if (fd == listen_fd)
 			{
-				while (true)
-				{
-					sockaddr_storage ss;
-					socklen_t slen = sizeof(ss);
-					int cfd = ::accept(listen_fd, (sockaddr*)&ss, &slen);
-					if (cfd == -1)
-					{
-						if (errno == EAGAIN || errno == EWOULDBLOCK)
-							break;
-						else
-						{
-							log_errno("accept");
-							break;
-						}
-					}
-					set_non_blocking(cfd);
-					epoll_event cev{};
-					cev.data.fd = cfd;
-					cev.events = EPOLLIN | EPOLLET;
-					epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev);
-					Connection c;
-					c.fd = cfd;
-					c.out_buf.reserve(global_config.output_buffer_initial);
-					log_debug("Accepted fd=%d", cfd);
-					conns.emplace(cfd, std::move(c));
-				}
+				handle_new_connections(listen_fd, epfd, conns);
 			}
 			else
 			{
-				auto it = conns.find(fd);
-				if (it == conns.end())
-					continue;
-				Connection& c = it->second;
-				if (evs & (EPOLLHUP | EPOLLERR))
-				{
-					c.closed = true;
-				}
-				if (evs & EPOLLIN)
-				{
-					while (true)
-					{
-						uint8_t buf[4096];
-						ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
-						if (r > 0)
-						{
-							c.in_buf.insert(c.in_buf.end(), buf, buf + r);
-						}
-						else if (r == 0)
-						{
-							c.closed = true;
-							break;
-						}
-						else
-						{
-							if (errno == EAGAIN || errno == EWOULDBLOCK)
-								break;
-							else
-							{
-								log_errno("recv");
-								c.closed = true;
-								break;
-							}
-						}
-					}
-					if (!c.closed)
-					{
-						auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, G.max_in_flight, G.max_params_bytes, G.max_stdin_bytes, on_request_ready);
-						if (status == fcgi::CLOSE)
-							c.closed = true;
-					}
-					if (!c.out_buf.empty())
-						flush_connection(c, epfd);
-					for (auto& kv : c.requests)
-					{
-						auto& req = kv.second;
-						if (req.responded && req.files.type == DynamicVariable::ARRAY && !req.files.a.empty())
-						{
-							for (auto& f : req.files.a)
-							{
-								if (f.type != DynamicVariable::OBJECT) continue;
-								DynamicVariable* tp = f.find("temp_path");
-								if (!global_config.keep_uploaded_files && tp && tp->type == DynamicVariable::STRING && !tp->s.empty())
-								{
-									::unlink(tp->s.c_str());
-									tp->s.clear();
-								}
-							}
-							req.files = DynamicVariable::make_array();
-						}
-					}
-				}
-				if (evs & EPOLLOUT)
-				{
-					if (!c.out_buf.empty())
-						flush_connection(c, epfd);
-				}
-				bool all_responded = true;
-				for (auto& kv : c.requests)
-				{
-					if (!kv.second.responded)
-					{
-						all_responded = false;
-						break;
-					}
-				}
-				bool any_keep = false;
-				for (auto& kv : c.requests)
-					if (kv.second.keep_conn)
-					{
-						any_keep = true;
-						break;
-					}
-				if (c.closed || (all_responded && !any_keep && c.out_buf.empty()))
-				{
-					epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
-					::close(fd);
-					log_debug("Closed fd=%d", fd);
-					conns.erase(it);
-				}
+				handle_connection_io(fd, evs, epfd, conns);
 			}
 		}
 	}
 
-	for (auto& kv : conns)
-	{
-		::close(kv.first);
-	}
-	::close(listen_fd);
-	::close(epfd);
-	if (!G.unix_path.empty())
-		::unlink(G.unix_path.c_str());
-	log_info("fastcgi-dump-server shutdown.");
+	cleanup_server_resources(listen_fd, epfd, conns);
 	return 0;
 }

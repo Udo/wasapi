@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include "http.h"
 #include "dynamic_variable.h"
+#include "request.h"
 
 namespace fcgi
 {
@@ -71,33 +72,6 @@ namespace fcgi
 		uint8_t protocolStatus;
 		uint8_t reserved[3];
 	} __attribute__((packed));
-
-	struct Request
-	{
-		uint16_t id = 0;
-		enum class owner {
-			none,
-			fcgi,
-		} owner = owner::fcgi;
-		bool got_begin = false;
-		bool keep_conn = false;
-		bool params_complete = false;
-		bool stdin_complete = false;
-		bool responded = false;
-		bool aborted = false;
-		bool failed = false; // limit or protocol failure
-		DynamicVariable env; // environment parameters (object)
-		DynamicVariable params; // query + form parameters (object)
-		DynamicVariable cookies; // parsed cookies (object of key -> string)
-		DynamicVariable headers; // response headers
-		DynamicVariable files; // uploaded files (array of objects)
-		DynamicVariable session; // session data (object)
-		DynamicVariable context;
-		std::string session_id; // session identifier
-		std::vector<uint8_t> body; // STDIN data (binary-safe)
-		size_t params_bytes = 0; // cumulative param bytes
-		size_t body_bytes = 0; // cumulative body bytes
-	};
 
 	enum ProcessStatus
 	{

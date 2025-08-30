@@ -51,7 +51,7 @@ static std::string random_hex(size_t bytes)
     return out;
 }
 
-std::string session_get_id(fcgi::Request& r, bool create)
+std::string session_get_id(Request& r, bool create)
 {
     if (!r.session_id.empty()) return r.session_id;
     if (!create) return std::string();
@@ -59,7 +59,7 @@ std::string session_get_id(fcgi::Request& r, bool create)
     return r.session_id;
 }
 
-bool session_load(fcgi::Request& r)
+bool session_load(Request& r)
 {
     if (r.session_id.empty()) return false;
     std::ifstream in(session_path(r.session_id));
@@ -75,7 +75,7 @@ bool session_load(fcgi::Request& r)
     return false;
 }
 
-bool session_start(fcgi::Request& r)
+bool session_start(Request& r)
 {
     session_get_id(r, true);
     if (!r.cookies.find(global_config.session_cookie_name))
@@ -85,7 +85,7 @@ bool session_start(fcgi::Request& r)
     return true;
 }
 
-bool session_save(fcgi::Request& r)
+bool session_save(Request& r)
 {
     if (r.session_id.empty()) return false;
     mkdir_if_not_exists(global_config.session_storage_path);
@@ -104,7 +104,7 @@ bool session_save(fcgi::Request& r)
     return true;
 }
 
-bool session_clear(fcgi::Request& r)
+bool session_clear(Request& r)
 {
     if (!r.session_id.empty())
     {

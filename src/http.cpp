@@ -133,11 +133,12 @@ void parse_query_string(const std::string& input, std::unordered_map<std::string
 	}
 }
 
-bool parse_multipart_formdata(const std::string& body, const std::string& boundary, const std::string& upload_dir,
+bool extract_files_from_formdata(const std::string& body, const std::string& boundary, const std::string& upload_dir,
 					 std::unordered_map<std::string, std::string>& form_fields, DynamicVariable& files)
 {
 	if (boundary.empty())
 		return false;
+	files = DynamicVariable::make_array();
 	std::string delim = "--" + boundary;
 	size_t pos = 0;
 	while (true)
@@ -258,7 +259,6 @@ bool parse_multipart_formdata(const std::string& body, const std::string& bounda
 					written += (size_t)w;
 				}
 				::close(fd);
-				if (files.type != DynamicVariable::ARRAY) files = DynamicVariable::make_array();
 				char hash_hex[17]; std::snprintf(hash_hex, sizeof(hash_hex), "%016llx", (unsigned long long)hv);
 				DynamicVariable file = DynamicVariable::make_object();
 				file["field_name"] = field_name;

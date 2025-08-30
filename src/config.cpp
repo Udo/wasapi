@@ -100,7 +100,7 @@ bool load_kv_file(const std::string& path, DynamicVariable& out)
 		{
 			if (existing->type == DynamicVariable::STRING)
 			{
-				std::string prev = existing->s;
+				std::string prev = existing->data.s;
 				*existing = DynamicVariable::make_array();
 				existing->push(DynamicVariable::make_string(prev));
 				existing->push(DynamicVariable::make_string(value));

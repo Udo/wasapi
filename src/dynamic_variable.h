@@ -9,15 +9,24 @@
 
 struct DynamicVariable
 {
-	enum Type { NIL, STRING, OBJECT, ARRAY, BINARY, NUMBER, BOOL } type = NIL;
-	std::string s;
-	std::unordered_map<std::string, DynamicVariable> o;
-	std::vector<DynamicVariable> a;
-	std::vector<uint8_t> bin;
-	double num = 0.0;
-	bool b = false;
+	enum Type { NIL, STRING, OBJECT, ARRAY, NUMBER, BOOL } type = NIL;
+	
+	union Data {
+		std::string s;
+		std::unordered_map<std::string, DynamicVariable> o;
+		std::vector<DynamicVariable> a;
+		double num;
+		bool b;
+		
+		Data() : num(0.0) {} 
+		~Data() {}
+	} data;
 
 	DynamicVariable();
+	DynamicVariable(const DynamicVariable& other);
+	DynamicVariable(DynamicVariable&& other) noexcept;
+	~DynamicVariable();
+	
 	DynamicVariable(const char* lit);
 	DynamicVariable(std::string str);
 	DynamicVariable(double v);
@@ -27,7 +36,6 @@ struct DynamicVariable
 	static DynamicVariable make_string(std::string v);
 	static DynamicVariable make_number(double v);
 	static DynamicVariable make_bool(bool v);
-	static DynamicVariable make_binary(std::vector<uint8_t> v);
 	static DynamicVariable make_object();
 	static DynamicVariable make_array();
 	static DynamicVariable make_null();
@@ -35,6 +43,8 @@ struct DynamicVariable
 	void clear();
 	DynamicVariable& operator[](const std::string& key);
 
+	DynamicVariable& operator=(const DynamicVariable& other);
+	DynamicVariable& operator=(DynamicVariable&& other) noexcept;
 	DynamicVariable& operator=(const std::string& str);
 	DynamicVariable& operator=(std::string&& str);
 	DynamicVariable& operator=(const char* lit);

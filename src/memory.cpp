@@ -1,66 +1,40 @@
 #include "memory.h"
 #include <cstdlib>
 #include <algorithm>
+#include <cstring>
 
 Arena::~Arena()
 {
 	std::free(data);
 }
 
-void Arena::reserve(size_t cap)
+Arena::Arena(size_t cap)
 {
-	if (cap <= capacity)
-		return;
-	uint8_t* nd = static_cast<uint8_t*>(std::realloc(data, cap));
-	if (!nd)
-		throw std::bad_alloc();
-	data = nd;
-	capacity = cap;
-}
-
-ArenaPool::ArenaPool(size_t arena_capacity, size_t preallocate) : arena_capacity_(arena_capacity)
-{
-	free_list_.reserve(preallocate);
-	all_.reserve(preallocate);
-	for (size_t i = 0; i < preallocate; i++)
+	data = (uint8_t*)std::malloc(cap);
+	if (data)
 	{
-		Arena* a = new Arena(arena_capacity_);
-		free_list_.push_back(a);
-		all_.push_back(a);
+		capacity = cap;
+		reset();
 	}
 }
 
-ArenaPool::~ArenaPool()
+void Arena::reset()
 {
-	for (Arena* a : all_)
-	{
-		delete a;
-	}
+	offset = 0;
 }
 
-Arena* ArenaPool::acquire()
+void* Arena::alloc(size_t sz, size_t align)
 {
-	std::lock_guard<std::mutex> lock(mtx_);
-	Arena* a;
-	if (free_list_.empty())
-	{
-		a = new Arena(arena_capacity_);
-		all_.push_back(a);
-	}
-	else
-	{
-		a = free_list_.back();
-		free_list_.pop_back();
-	}
-	a->reset();
-	return a;
-}
-
-void ArenaPool::release(Arena* a)
-{
-	if (!a)
-		return;
-	a->reset();
-	std::lock_guard<std::mutex> lock(mtx_);
-	free_list_.push_back(a);
+	size_t base_addr = reinterpret_cast<size_t>(data);
+	size_t cur = base_addr + offset;
+	size_t aligned = (cur + (align - 1)) & ~(align - 1);
+	size_t new_off = aligned - base_addr + sz;
+	if (new_off > capacity)
+		return nullptr;
+	offset = new_off;
+	void* ptr = reinterpret_cast<void*>(aligned);
+#ifdef ARENA_ZERO_CLEAR
+	memset(ptr, 0, sz);
+#endif
+	return ptr;
 }

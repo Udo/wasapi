@@ -66,11 +66,11 @@ namespace fcgi
 
 	static void fail_request(Request& r, std::vector<uint8_t>& out_buf, uint8_t status)
 	{
-		if (!r.responded)
+		if (!(r.flags & Request::RESPONDED))
 		{
 			append_end_request(out_buf, r.id, 0, status);
-			r.responded = true;
-			r.failed = true;
+			r.flags |= Request::RESPONDED;
+			r.flags |= Request::FAILED;
 		}
 	}
 
@@ -121,8 +121,9 @@ namespace fcgi
 						if (Request* nr = current_req(reqId))
 						{
 							rptr = nr;
-							nr->got_begin = true;
-							nr->keep_conn = (br.flags & KEEP_CONN) != 0;
+							nr->flags |= Request::INITIALIZED;
+							if (br.flags & KEEP_CONN)
+								nr->flags |= Request::KEEP_CONNECTION;
 						}
 					}
 					break;
@@ -134,9 +135,9 @@ namespace fcgi
 						rptr = r;
 						if (contentLength == 0)
 						{
-							r->params_complete = true;
+							r->flags |= Request::PARAMS_COMPLETE;
 						}
-						else if (!r->failed)
+						else if (!(r->flags & Request::FAILED))
 						{
 							const uint8_t* p = content;
 							const uint8_t* end = content + contentLength;
@@ -175,9 +176,9 @@ namespace fcgi
 						rptr = r;
 						if (contentLength == 0)
 						{
-							r->stdin_complete = true;
+							r->flags |= Request::INPUT_COMPLETE;
 						}
-						else if (!r->failed)
+						else if (!(r->flags & Request::FAILED))
 						{
 							if (r->body_bytes + contentLength > max_stdin_bytes)
 							{
@@ -201,7 +202,7 @@ namespace fcgi
 					if (Request* r = current_req(reqId))
 					{
 						rptr = r;
-						r->aborted = true;
+						r->flags |= Request::ABORTED;
 						fail_request(*r, out_buf, REQUEST_COMPLETE);
 					}
 					break;
@@ -212,7 +213,8 @@ namespace fcgi
 				}
 			}
 			offset += totalLen;
-			if (rptr && !rptr->failed && !rptr->responded && rptr->params_complete && rptr->stdin_complete)
+			if (rptr && !(rptr->flags & Request::FAILED) && !(rptr->flags & Request::RESPONDED) && 
+			    (rptr->flags & Request::PARAMS_COMPLETE) && (rptr->flags & Request::INPUT_COMPLETE))
 			{
 				if (on_request_ready)
 					on_request_ready(*rptr, out_buf);
