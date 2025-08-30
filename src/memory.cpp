@@ -38,3 +38,37 @@ void* Arena::alloc(size_t sz, size_t align)
 #endif
 	return ptr;
 }
+
+void ArenaManager::create_arenas(size_t count, size_t capacity)
+{
+	arenas.clear();
+	in_use.clear();
+	for (size_t i = 0; i < count; ++i)
+	{
+		arenas.emplace_back(capacity);
+		arenas[i].management_flag = i;
+		in_use.push_back(false);
+	}
+}
+
+Arena* ArenaManager::get()
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	for (size_t i = 0; i < arenas.size(); ++i)
+	{
+		if (!in_use[i])
+		{
+			in_use[i] = true;
+			return &arenas[i];
+		}
+	}
+	return nullptr;
+}
+
+void ArenaManager::release(Arena* arena)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	auto i = arena->management_flag;
+	in_use[i] = false;
+	arena->reset();
+}

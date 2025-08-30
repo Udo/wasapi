@@ -1,7 +1,12 @@
 #include "http.h"
+#include "request.h"
+#include "dynamic_variable.h"
+#include "config.h"
 #include <cctype>
 #include <vector>
 #include <unistd.h>
+#include <cstdio>
+#include <sstream>
 
 inline int hexval(char c)
 {
@@ -278,4 +283,174 @@ bool extract_files_from_formdata(const std::string& body, const std::string& bou
 		pos = part_end + 2; // skip CRLF before next delimiter search
 	}
 	return true;
+}
+
+void parse_cookie_header(Request& r, DynamicVariable* cookie_var)
+{
+	std::string cookie_string = cookie_var ? cookie_var->to_string() : "";
+	if (r.cookies.type != DynamicVariable::OBJECT)
+		r.cookies = DynamicVariable::make_object();
+	if (!cookie_string.empty())
+	{
+		size_t pos = 0;
+		while (pos < cookie_string.size())
+		{
+			size_t semi = cookie_string.find(';', pos);
+			if (semi == std::string::npos)
+				semi = cookie_string.size();
+			std::string segment = cookie_string.substr(pos, semi - pos);
+			pos = semi + 1; // advance
+			auto trim = [](std::string& s)
+			{
+				while (!s.empty() && (unsigned char)s.front() <= ' ')
+					s.erase(s.begin());
+				while (!s.empty() && (unsigned char)s.back() <= ' ')
+					s.pop_back();
+			};
+			trim(segment);
+			if (segment.empty())
+				continue;
+			size_t eq = segment.find('=');
+			std::string key;
+			std::string value;
+			if (eq == std::string::npos)
+			{
+				key = segment; // flag cookie gets empty value
+			}
+			else
+			{
+				key = segment.substr(0, eq);
+				value = segment.substr(eq + 1);
+				trim(key);
+				trim(value);
+				if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+					value = value.substr(1, value.size() - 2);
+			}
+			if (!key.empty())
+				r.cookies[key] = DynamicVariable::make_string(value);
+		}
+	}
+}
+
+void parse_query_string(Request& r, DynamicVariable* query_string)
+{
+	std::string qs = query_string ? query_string->to_string() : "";
+	if (r.params.type != DynamicVariable::OBJECT)
+		r.params = DynamicVariable::make_object();
+	std::unordered_map<std::string, std::string> tmp;
+	parse_query_string(qs, tmp);
+	for (auto& kv : tmp)
+		r.params[kv.first] = DynamicVariable::make_string(kv.second);
+}
+
+void parse_json_form_data(Request& r)
+{
+	DynamicVariable parsed;
+	size_t errpos = 0;
+	if (parse_json(r.body, parsed, &errpos))
+	{
+		if (parsed.type == DynamicVariable::OBJECT)
+		{
+			if (r.params.type != DynamicVariable::OBJECT)
+				r.params = DynamicVariable::make_object();
+			for (auto& kv : parsed.data.o)
+				r.params[kv.first] = kv.second;
+		}
+		else
+		{
+			if (r.params.type != DynamicVariable::OBJECT)
+				r.params = DynamicVariable::make_object();
+			r.params["_json"] = parsed;
+		}
+	}
+	else
+	{
+		if (r.params.type != DynamicVariable::OBJECT)
+			r.params = DynamicVariable::make_object();
+		r.params["_json_error"] = DynamicVariable::make_string("parse error at position " + std::to_string(errpos));
+	}
+}
+
+void parse_multipart_form_data(Request& r)
+{
+	const DynamicVariable* it_ct = r.env.find("CONTENT_TYPE");
+	if (!it_ct || it_ct->type != DynamicVariable::STRING)
+		return;
+	std::string ct = it_ct->data.s;
+	std::string lct = ct;
+	for (auto& c : lct)
+		c = std::tolower(c);
+	std::string boundary;
+	std::string key = "boundary=";
+	size_t bpos = lct.find(key);
+	if (bpos != std::string::npos)
+		boundary = ct.substr(bpos + key.size());
+	if (!boundary.empty() && boundary.front() == '"' && boundary.back() == '"' && boundary.size() >= 2)
+		boundary = boundary.substr(1, boundary.size() - 2);
+	if (boundary.empty())
+		return;
+	std::unordered_map<std::string, std::string> tmp;
+	extract_files_from_formdata(r.body, boundary, global_config.upload_tmp_dir, tmp, r.files);
+	r.params.type = DynamicVariable::OBJECT;
+	for (auto& kv : tmp)
+		r.params[kv.first] = DynamicVariable::make_string(kv.second);
+}
+
+void parse_urlencoded_form_data(Request& r)
+{
+	std::unordered_map<std::string, std::string> tmp;
+	parse_query_string(r.body, tmp);
+	r.params.type = DynamicVariable::OBJECT;
+	for (auto& kv : tmp)
+		r.params[kv.first] = DynamicVariable::make_string(kv.second);
+}
+
+void parse_form_data(Request& r)
+{
+	const DynamicVariable* it_ct = r.env.find("CONTENT_TYPE");
+	if (!it_ct || it_ct->type != DynamicVariable::STRING)
+		return;
+	std::string ct = it_ct->data.s;
+	std::string lct = ct;
+	for (auto& c : lct)
+		c = std::tolower(c);
+	if (lct.find("application/json") != std::string::npos)
+	{
+		parse_json_form_data(r);
+	}
+	else if (lct.find("application/x-www-form-urlencoded") != std::string::npos)
+	{
+		parse_urlencoded_form_data(r);
+	}
+	else if (lct.find("multipart/form-data") != std::string::npos)
+	{
+		parse_multipart_form_data(r);
+	}
+}
+
+void output_headers(Request& r, std::ostringstream& oss)
+{
+	for (auto& kv : r.headers.data.o)
+	{
+		if (kv.second.type == DynamicVariable::STRING)
+		{
+			std::string lname = kv.first;
+			for (auto& c : lname)
+				c = std::tolower(c);
+			oss << kv.first << ": " << kv.second.data.s << "\r\n";
+		}
+		else
+		{
+			oss << kv.first << ": " << to_json(kv.second, false, 0) << "\r\n";
+		}
+	}
+	oss << "\r\n"; // header/body separator
+}
+
+void parse_endpoint_file(Request& r, DynamicVariable* file_path)
+{
+	r.context = DynamicVariable::make_object();
+	if (!file_path || file_path->type != DynamicVariable::STRING)
+		return;
+	load_kv_file(file_path->data.s, r.context);
 }

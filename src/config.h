@@ -20,9 +20,10 @@ struct GlobalConfig
 
 	std::string upload_tmp_dir = "/tmp";
 
-	uint32_t max_in_flight = 64;
+	uint32_t max_in_flight = 32;
 	size_t max_params_bytes = 256 * 1024;
 	size_t max_stdin_bytes = 2 * 1024 * 1024;
+	size_t max_memory_per_request = 16 * 1024 * 1024;
 
 	size_t body_preview_limit = 1024;
 	size_t print_env_limit = 0;
@@ -46,6 +47,8 @@ struct GlobalConfig
 
 	bool keep_uploaded_files = false;
 	bool cleanup_temp_on_disconnect = true;
+	double file_cache_ttl = 60 * 10; // seconds
+	size_t file_cache_max_size = 256 * 1024 * 1024;
 
 	int log_level = 1;
 	std::string log_destination = "stderr";

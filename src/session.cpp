@@ -1,4 +1,5 @@
 #include "session.h"
+#include "fileio.h"
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
@@ -69,10 +70,11 @@ bool session_load(Request& r)
 {
 	if (r.session_id.empty())
 		return false;
-	std::ifstream in(session_path(r.session_id));
-	if (!in)
+
+	std::string content = read_entire_file_cached(session_path(r.session_id));
+	if (content.empty())
 		return false;
-	std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
 	DynamicVariable parsed;
 	size_t err = 0;
 	if (parse_json(content, parsed, &err))
@@ -98,24 +100,11 @@ bool session_save(Request& r)
 	if (r.session_id.empty())
 		return false;
 	mkdir_if_not_exists(global_config.session_storage_path);
-	std::string tmp = session_path(r.session_id) + ".tmp";
-	std::ofstream out(tmp, std::ios::trunc | std::ios::binary);
-	if (!out)
-		return false;
-	out << to_json(r.session, false, 0);
-	out.close();
-	if (!out.good())
-	{
-		::unlink(tmp.c_str());
-		return false;
-	}
+
+	std::string content = to_json(r.session, false, 0);
 	std::string final_path = session_path(r.session_id);
-	if (::rename(tmp.c_str(), final_path.c_str()) != 0)
-	{
-		::unlink(tmp.c_str());
-		return false;
-	}
-	return true;
+
+	return write_entire_file(final_path, content);
 }
 
 bool session_clear(Request& r)

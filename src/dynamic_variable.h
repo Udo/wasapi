@@ -73,5 +73,6 @@ struct DynamicVariable
 bool parse_json(const std::string& text, DynamicVariable& out, size_t* error_pos = nullptr);
 std::string to_json(const DynamicVariable& v, bool pretty = false, int indent = 0);
 std::string print_r(const DynamicVariable& v, int indent = 2);
+void print_any_limited(std::ostringstream& oss, const DynamicVariable& v, size_t limit, int indent, int depth = 0);
 
 #endif

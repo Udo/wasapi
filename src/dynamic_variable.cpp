@@ -842,3 +842,67 @@ std::string print_r(const DynamicVariable& v, int indent)
 		out.push_back('\n');
 	return out;
 }
+
+void print_any_limited(std::ostringstream& oss, const DynamicVariable& v, size_t limit, int indent, int depth)
+{
+	auto ind = [&](int d)
+	{ oss << std::string(d * indent, ' '); };
+	switch (v.type)
+	{
+		case DynamicVariable::NIL:
+			oss << "null\n";
+			break;
+		case DynamicVariable::STRING:
+			oss << '"' << v.data.s << '"' << "\n";
+			break;
+		case DynamicVariable::NUMBER:
+			oss << v.data.num << "\n";
+			break;
+		case DynamicVariable::BOOL:
+			oss << (v.data.b ? "true" : "false") << "\n";
+			break;
+		case DynamicVariable::ARRAY:
+			oss << "[\n";
+			if (!v.data.a.empty())
+			{
+				size_t printed = 0;
+				for (size_t i = 0; i < v.data.a.size(); ++i)
+				{
+					if (limit && printed >= limit)
+					{
+						ind(depth + 1);
+						oss << "... (truncated)\n";
+						break;
+					}
+					ind(depth + 1);
+					print_any_limited(oss, v.data.a[i], 0, indent, depth + 1);
+					++printed;
+				}
+			}
+			ind(depth);
+			oss << "]\n";
+			break;
+		case DynamicVariable::OBJECT:
+			oss << "{\n";
+			if (!v.data.o.empty())
+			{
+				size_t printed = 0;
+				for (auto it = v.data.o.begin(); it != v.data.o.end(); ++it)
+				{
+					if (limit && printed >= limit)
+					{
+						ind(depth + 1);
+						oss << "... (truncated)\n";
+						break;
+					}
+					ind(depth + 1);
+					oss << it->first << ": ";
+					print_any_limited(oss, it->second, 0, indent, depth + 1);
+					++printed;
+				}
+			}
+			ind(depth);
+			oss << "}\n";
+			break;
+	}
+}

@@ -23,4 +23,15 @@ struct Arena
 	void* alloc(size_t sz, size_t align = alignof(std::max_align_t));
 };
 
+struct ArenaManager
+{
+	std::vector<Arena> arenas;
+	std::mutex mutex;
+	std::vector<bool> in_use;
+
+	void create_arenas(size_t count, size_t capacity);
+	Arena* get();
+	void release(Arena* arena);
+};
+
 #endif

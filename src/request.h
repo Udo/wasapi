@@ -4,10 +4,12 @@
 #include <cstdint>
 #include <string>
 #include "dynamic_variable.h"
+#include "memory.h"
 
 struct Request
 {
 	uint16_t id = 0;
+	Arena* arena = nullptr;
 
 	enum RequestFlags : uint64_t
 	{

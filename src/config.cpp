@@ -1,8 +1,10 @@
 #include "config.h"
+#include "fileio.h"
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <unordered_map>
 #include <cctype>
 #include <functional>
@@ -105,9 +107,12 @@ bool load_kv_file(const std::string& path, DynamicVariable& out)
 {
 	if (out.type != DynamicVariable::OBJECT)
 		out = DynamicVariable::make_object();
-	std::ifstream in(path);
-	if (!in)
+
+	std::string content = read_entire_file_cached(path);
+	if (content.empty())
 		return false;
+
+	std::istringstream in(content);
 	std::string line;
 	std::string last_key = "undefined";
 	size_t lineno = 0;
