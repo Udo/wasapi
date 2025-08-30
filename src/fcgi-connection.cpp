@@ -41,14 +41,7 @@ namespace fcgi_conn
 		size_t out_pos = 0; // bytes already sent from start of out_buf (IO thread only)
 		std::unordered_map<uint16_t, Request*> requests; // managed via arenas
 		std::atomic<bool> closed{ false }; // accessed from IO + worker threads
-		enum State
-		{
-			ACTIVE,
-			WAITING_ARENA,
-			CLOSING
-		} state = ACTIVE;
 		bool waiting_for_arena = false; // BEGIN_REQUEST record deferred (legacy helper flag)
-		bool in_wait_queue = false; // listed in g_waiting_conns
 		std::atomic<int> active_workers{ 0 };
 		uint32_t epoll_mask = EPOLLIN | EPOLLET; // currently registered interest mask
 		bool want_write_interest = false; // desired EPOLLOUT interest
@@ -57,12 +50,16 @@ namespace fcgi_conn
 	static std::unordered_map<int, Connection> g_conns;
 	static RequestReadyCallback g_user_request_ready = nullptr;
 	static int g_epfd = -1; // epoll fd for worker-triggered wakeups
-	static std::deque<int> g_pending_conns; // accepted but not yet registered (waiting for free arena)
-	static std::deque<int> g_waiting_conns; // existing connections blocked on arena
+	// Removed userspace pending-accept queue and per-connection waiting queue; backpressure via paused accept()
 	static int g_timerfd = -1; // periodic housekeeping timer
 	static std::vector<int> g_close_queue; // deferred closes
 	static std::vector<Request*> g_pending_output; // requests ready for output assembly
 	static std::mutex g_pending_output_mutex; // protects g_pending_output
+	static int g_listen_fd = -1; // current listening socket (for pausing/resuming accept)
+	static bool g_accept_paused = false; // whether accept() is currently paused (socket removed from epoll)
+
+	static void resume_accept(); // fwd
+	static void pause_accept(); // fwd
 	static int g_eventfd = -1; // signals IO thread about pending work
 	static Request* allocate_request(uint16_t id);
 	static void flush_connection(Connection& c, int epfd);
@@ -73,60 +70,34 @@ namespace fcgi_conn
 	static void maybe_update_epoll(Connection& c, int epfd, uint32_t desired); // forward
 	thread_local Connection* tls_io_connection = nullptr;
 
-	static inline void enqueue_waiting(Connection& c)
+	static void process_waiting_connections()
 	{
-		if (!c.in_wait_queue)
-		{
-			g_waiting_conns.push_back(c.fd);
-			c.in_wait_queue = true;
-		}
-	}
-
-	static void retry_waiting(int epfd)
-	{
-		if (g_waiting_conns.empty())
+		if (global_arena_manager.available_count.load(std::memory_order_relaxed) <= 0)
 			return;
-		int budget = (int)global_arena_manager.available_count.load(std::memory_order_relaxed);
-		if (budget <= 0)
-			return;
-		int processed = 0;
-		size_t qcount = g_waiting_conns.size();
-		for (size_t i = 0; i < qcount && budget > 0 && !g_waiting_conns.empty(); ++i)
+		// Simple pass over all connections; retry any marked waiting_for_arena
+		for (auto& kv : g_conns)
 		{
-			int fd = g_waiting_conns.front();
-			g_waiting_conns.pop_front();
-			auto it = g_conns.find(fd);
-			if (it == g_conns.end())
-				continue; // connection gone
-			Connection& c = it->second;
-			c.in_wait_queue = false; // will re-add if still waiting
-			if (c.state != Connection::WAITING_ARENA)
+			Connection& c = kv.second;
+			if (!c.waiting_for_arena || c.closed.load(std::memory_order_relaxed))
 				continue;
-			if (c.closed.load(std::memory_order_relaxed))
-			{
-				c.state = Connection::CLOSING;
-				continue;
-			}
+			if (global_arena_manager.available_count.load(std::memory_order_relaxed) <= 0)
+				break; // no more arenas
 			bool waiting = false;
 			tls_io_connection = &c;
 			auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, allocate_request, global_config.max_params_bytes, global_config.max_stdin_bytes, internal_on_request_ready, waiting);
 			tls_io_connection = nullptr;
 			if (status == fcgi::CLOSE)
-			{
 				c.closed.store(true, std::memory_order_relaxed);
-				c.state = Connection::CLOSING;
-			}
-			if (waiting)
+			if (!waiting)
 			{
-				enqueue_waiting(c);
-				break;
+				c.waiting_for_arena = false;
+				if (c.out_pos != c.out_buf.size())
+					flush_connection(c, g_epfd);
 			}
-			budget = (int)global_arena_manager.available_count.load(std::memory_order_relaxed);
-			c.waiting_for_arena = false;
-			c.state = c.closed.load(std::memory_order_relaxed) ? Connection::CLOSING : Connection::ACTIVE;
-			if (c.out_pos != c.out_buf.size())
-				flush_connection(c, epfd);
-			processed++;
+			else
+			{
+				// still waiting; leave flag set
+			}
 		}
 	}
 
@@ -354,53 +325,10 @@ namespace fcgi_conn
 		r->~Request();
 		if (a)
 			global_arena_manager.release(a);
-		if (!g_pending_conns.empty() && global_arena_manager.available_count.load(std::memory_order_relaxed) > 0 && g_epfd != -1)
-		{
-			int fd = g_pending_conns.front();
-			g_pending_conns.pop_front();
-			Connection& c = g_conns[fd];
-			c.fd = fd;
-			c.out_buf.reserve(global_config.output_buffer_initial);
-			epoll_event cev{};
-			cev.data.fd = fd;
-			cev.events = EPOLLIN | EPOLLET;
-			epoll_ctl(g_epfd, EPOLL_CTL_ADD, fd, &cev);
-			log_debug("Activated deferred fd=%d", fd);
-		}
-		if (g_epfd != -1)
-			retry_waiting(g_epfd);
-		if (!g_waiting_conns.empty() && global_arena_manager.available_count.load(std::memory_order_relaxed) > 0 && g_epfd != -1)
-		{
-			int budget = (int)global_arena_manager.available_count.load(std::memory_order_relaxed);
-			while (budget-- > 0 && !g_waiting_conns.empty() && global_arena_manager.available_count.load(std::memory_order_relaxed) > 0)
-			{
-				int fd = g_waiting_conns.front();
-				g_waiting_conns.pop_front();
-				auto it = g_conns.find(fd);
-				if (it == g_conns.end())
-					continue;
-				Connection& c = it->second;
-				if (!c.waiting_for_arena)
-					continue;
-				bool waiting = false;
-				tls_io_connection = &c;
-				auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, allocate_request, global_config.max_params_bytes, global_config.max_stdin_bytes, internal_on_request_ready, waiting);
-				tls_io_connection = nullptr;
-				if (status == fcgi::CLOSE)
-					c.closed.store(true, std::memory_order_relaxed);
-				if (!waiting)
-				{
-					c.waiting_for_arena = false;
-					if (!c.out_buf.empty())
-						flush_connection(c, g_epfd);
-				}
-				else
-				{
-					g_waiting_conns.push_back(fd);
-					break; // stop; no more arenas likely free
-				}
-			}
-		}
+		// If accept was paused due to no arenas, resume when at least one is free
+		if (g_accept_paused && global_arena_manager.available_count.load(std::memory_order_relaxed) > 0)
+			resume_accept();
+		process_waiting_connections();
 	}
 
 	static void finalize_request(Request& req)
@@ -459,13 +387,47 @@ namespace fcgi_conn
 	{
 		(void)listen_fd; // currently unused; placeholder if future per-socket state needed
 		g_user_request_ready = cb;
+		g_listen_fd = listen_fd;
 		auto& G = global_config;
 		std::string addr = G.unix_path.empty() ? (std::string("tcp:") + std::to_string(G.port)) : G.unix_path;
 		log_info("server listening on %s", addr.c_str());
 	}
 
+	static void pause_accept()
+	{
+		if (g_accept_paused || g_epfd == -1 || g_listen_fd == -1)
+			return;
+		// Remove listen socket from epoll to stop EPOLLIN wakeups.
+		if (epoll_ctl(g_epfd, EPOLL_CTL_DEL, g_listen_fd, nullptr) == -1)
+			log_errno("epoll_ctl DEL listen (pause)");
+		else
+			log_debug("Paused accept() (no arenas) fd=%d", g_listen_fd);
+		g_accept_paused = true;
+	}
+
+	static void resume_accept()
+	{
+		if (!g_accept_paused || g_epfd == -1 || g_listen_fd == -1)
+			return;
+		// Re-add listen socket to epoll interest
+		epoll_event ev{};
+		ev.data.fd = g_listen_fd;
+		ev.events = EPOLLIN | EPOLLET;
+		if (epoll_ctl(g_epfd, EPOLL_CTL_ADD, g_listen_fd, &ev) == -1)
+			log_errno("epoll_ctl ADD listen (resume)");
+		else
+			log_debug("Resumed accept() fd=%d", g_listen_fd);
+		g_accept_paused = false;
+	}
+
 	static void handle_new_connections(int listen_fd, int epfd)
 	{
+		// If we currently have zero arenas, pause accepting new connections (backpressure at kernel backlog)
+		if (global_arena_manager.available_count.load(std::memory_order_relaxed) == 0)
+		{
+			pause_accept();
+			return; // don't drain accept queue now; keep sockets in kernel backlog
+		}
 		while (true)
 		{
 			sockaddr_storage ss;
@@ -482,14 +444,6 @@ namespace fcgi_conn
 				}
 			}
 			set_non_blocking(cfd);
-			if (global_arena_manager.available_count.load(std::memory_order_relaxed) == 0)
-			{
-				g_pending_conns.push_back(cfd);
-				g_conns[cfd]; // default-construct in-place (no move/copy)
-				log_debug("Deferred fd=%d (no free arenas)", cfd);
-			}
-			else
-			{
 				epoll_event cev{};
 				cev.data.fd = cfd;
 				cev.events = EPOLLIN | EPOLLET;
@@ -498,6 +452,11 @@ namespace fcgi_conn
 				c.fd = cfd;
 				c.out_buf.reserve(global_config.output_buffer_initial);
 				log_debug("Accepted fd=%d", cfd);
+			// If arenas were exhausted after accepting (unlikely but possible due to race), pause further accepts.
+			if (global_arena_manager.available_count.load(std::memory_order_relaxed) == 0)
+			{
+				pause_accept();
+				break;
 			}
 		}
 	}
@@ -557,14 +516,11 @@ namespace fcgi_conn
 					if (!c.waiting_for_arena)
 					{
 						c.waiting_for_arena = true;
-						c.state = Connection::WAITING_ARENA;
-						enqueue_waiting(c);
 					}
 				}
 				else
 				{
 					c.waiting_for_arena = false;
-					c.state = c.closed.load(std::memory_order_relaxed) ? Connection::CLOSING : Connection::ACTIVE;
 				}
 			}
 
@@ -722,6 +678,7 @@ namespace fcgi_conn
 			}
 		}
 
+		// Add listen socket initially (might be removed later if arenas exhaust)
 		epoll_event ev{};
 		ev.data.fd = listen_fd;
 		ev.events = EPOLLIN | EPOLLET;
@@ -788,7 +745,6 @@ namespace fcgi_conn
 					uint64_t expirations;
 					ssize_t ret = ::read(g_timerfd, &expirations, sizeof(expirations));
 					(void)ret; // suppress unused variable warning
-					retry_waiting(epfd);
 					housekeeping_close_idle(epfd);
 				}
 				else

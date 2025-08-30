@@ -2,6 +2,7 @@
 #include "memory.h"
 #include <cctype>
 #include <sstream>
+#include <cstring>
 
 DynamicString::DynamicString(Arena* a)
 {
@@ -21,7 +22,7 @@ bool DynamicString::reserve(size_t sz)
 		if(!new_data)
 			return false;
 		if (data)
-			memccpy(new_data, data, 1, capacity);
+			std::memcpy(new_data, data, capacity);
 		data = new_data;
 		capacity = sz;
 	}
