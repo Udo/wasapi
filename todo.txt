@@ -1,0 +1,20 @@
+[x] Duplicate request cleanup logic in close_connection and housekeeping_close_idle.
+[x] Two loops in should_close_connection (can be one pass).
+[x] Repeated finalize_request+release_request blocks (serve shutdown, close paths).
+[x] Manual trimming lambdas repeated (cookies, multipart headers).
+[x] Two-phase parsing in handle_io vs process_fcgi wrapper (extra code path duplication).
+[x] Two separate loops checking KEEP_CONNECTION vs RESPONDED (merge).
+[x] process_fcgi wrapper returns waiting but caller re-derives closed state again elsewhere. 
+[x] Goto used in process_buffer for arena wait (can early-return with offset tracking). 
+[x] Worker lambda captures &r, c raw; Connection may be erased before lambda runs (dangling risk if closed early). 
+[x] implement request timeout max_request_time
+[x] output_buffer_initial reserved per connection even if never used heavily. 
+
+Longer term items
+[ ] Actually use Arena for things
+[ ] Unbounded in_buf growth until processed; no cap/backpressure before parsing. 
+[ ] Each param name/value allocates std::string separately (could reserve and reuse). 
+[ ] Per-request unordered_map for env/params with many tiny allocations; could use arena strings / string_view pointing into buffer. 
+[ ] flush_connection sends in tight loop without writev/coalescing; no smoothing for large bursts. 
+[ ] parse_multipart_form_data writes whole file into disk synchronously on IO thread (blocks epoll loop). 
+[ ] FNV hash computed byte-by-byte plus separate write loop (can combine into single pass with buffered write).

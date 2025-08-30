@@ -13,6 +13,7 @@ struct Request
 	Arena* arena = nullptr;
 	void* conn_ptr = nullptr; // owning connection (internal)
 	std::atomic<bool> worker_active{ false }; // set true while worker handler runs
+	double start_time_sec = 0.0; // monotonic start time
 
 	Request(Arena* ar);
 

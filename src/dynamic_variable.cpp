@@ -19,7 +19,7 @@ bool DynamicString::reserve(size_t sz)
 	if (sz > capacity)
 	{
 		void* new_data = arena->alloc(sz);
-		if(!new_data)
+		if (!new_data)
 			return false;
 		if (data)
 			std::memcpy(new_data, data, capacity);

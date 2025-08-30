@@ -18,8 +18,6 @@ struct DynamicString
 	DynamicString(Arena* a);
 	~DynamicString();
 	bool reserve(size_t sz);
-
-	
 };
 
 struct DynamicVariable

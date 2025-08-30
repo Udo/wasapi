@@ -50,55 +50,139 @@ namespace fcgi_conn
 	static std::unordered_map<int, Connection> g_conns;
 	static RequestReadyCallback g_user_request_ready = nullptr;
 	static int g_epfd = -1; // epoll fd for worker-triggered wakeups
-	// Removed userspace pending-accept queue and per-connection waiting queue; backpressure via paused accept()
 	static int g_timerfd = -1; // periodic housekeeping timer
 	static std::vector<int> g_close_queue; // deferred closes
 	static std::vector<Request*> g_pending_output; // requests ready for output assembly
 	static std::mutex g_pending_output_mutex; // protects g_pending_output
 	static int g_listen_fd = -1; // current listening socket (for pausing/resuming accept)
 	static bool g_accept_paused = false; // whether accept() is currently paused (socket removed from epoll)
+	static std::deque<int> g_waiting_conns; // connections waiting for arena allocation
 
 	static void resume_accept(); // fwd
 	static void pause_accept(); // fwd
 	static int g_eventfd = -1; // signals IO thread about pending work
 	static Request* allocate_request(uint16_t id);
 	static void flush_connection(Connection& c, int epfd);
-	static void internal_on_request_ready(Request& r, std::vector<uint8_t>& out_buf);
+	static void internal_on_request_ready(Request& r);
 	static bool should_close_connection(Connection& c); // forward
 	static void finalize_request(Request& req); // forward (already defined later)
 	static void release_request(Request* r); // forward
 	static void maybe_update_epoll(Connection& c, int epfd, uint32_t desired); // forward
+	static void close_connection(int fd, int epfd); // forward
+	static void cleanup_connection_requests(Connection& c); // forward
+	static void process_fcgi(Connection& c); // forward
+	static inline void update_write_interest(Connection& c, int epfd, bool want);
+	static inline bool modify_listen_interest(bool add); // add/remove listen fd from epoll
 	thread_local Connection* tls_io_connection = nullptr;
 
 	static void process_waiting_connections()
 	{
-		if (global_arena_manager.available_count.load(std::memory_order_relaxed) <= 0)
+		int budget = (int)global_arena_manager.available_count.load(std::memory_order_relaxed);
+		if (budget <= 0 || g_waiting_conns.empty())
 			return;
-		// Simple pass over all connections; retry any marked waiting_for_arena
-		for (auto& kv : g_conns)
+		size_t initial = g_waiting_conns.size();
+		for (size_t i = 0; i < initial && budget > 0 && !g_waiting_conns.empty(); ++i)
 		{
-			Connection& c = kv.second;
-			if (!c.waiting_for_arena || c.closed.load(std::memory_order_relaxed))
-				continue;
-			if (global_arena_manager.available_count.load(std::memory_order_relaxed) <= 0)
-				break; // no more arenas
-			bool waiting = false;
-			tls_io_connection = &c;
-			auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, allocate_request, global_config.max_params_bytes, global_config.max_stdin_bytes, internal_on_request_ready, waiting);
-			tls_io_connection = nullptr;
-			if (status == fcgi::CLOSE)
-				c.closed.store(true, std::memory_order_relaxed);
-			if (!waiting)
+			int fd = g_waiting_conns.front();
+			g_waiting_conns.pop_front();
+			auto it = g_conns.find(fd);
+			if (it == g_conns.end())
+				continue; // connection gone
+			Connection& c = it->second;
+			if (c.closed.load(std::memory_order_relaxed))
+				continue; // will be closed soon
+			bool was_waiting = c.waiting_for_arena;
+			process_fcgi(c);
+			if (was_waiting && !c.waiting_for_arena)
 			{
-				c.waiting_for_arena = false;
-				if (c.out_pos != c.out_buf.size())
-					flush_connection(c, g_epfd);
+				--budget;
+				flush_connection(c, g_epfd);
 			}
-			else
+			else if (c.waiting_for_arena)
 			{
-				// still waiting; leave flag set
+				g_waiting_conns.push_back(fd);
 			}
 		}
+	}
+
+	static inline void update_write_interest(Connection& c, int epfd, bool want)
+	{
+		uint32_t base = EPOLLIN | EPOLLET;
+		uint32_t desired = want ? (base | EPOLLOUT) : base;
+		bool have = (c.epoll_mask & EPOLLOUT) != 0;
+		if (have == want)
+			return;
+		maybe_update_epoll(c, epfd, desired);
+		c.want_write_interest = want;
+	}
+
+	static inline bool modify_listen_interest(bool add)
+	{
+		if (g_epfd == -1 || g_listen_fd == -1)
+			return false;
+		if (add)
+		{
+			epoll_event ev{};
+			ev.data.fd = g_listen_fd;
+			ev.events = EPOLLIN | EPOLLET;
+			if (epoll_ctl(g_epfd, EPOLL_CTL_ADD, g_listen_fd, &ev) == -1)
+			{
+				log_error("epoll_ctl ADD listen: %s", std::strerror(errno));
+				return false;
+			}
+		}
+		else
+		{
+			if (epoll_ctl(g_epfd, EPOLL_CTL_DEL, g_listen_fd, nullptr) == -1)
+			{
+				log_error("epoll_ctl DEL listen: %s", std::strerror(errno));
+				return false;
+			}
+		}
+		return true;
+	}
+
+	static void process_fcgi(Connection& c)
+	{
+		if (c.closed.load(std::memory_order_relaxed))
+			return;
+		bool waiting = false;
+		tls_io_connection = &c;
+		auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, allocate_request, internal_on_request_ready, waiting);
+		tls_io_connection = nullptr;
+		if (status == fcgi::CLOSE)
+			c.closed.store(true, std::memory_order_relaxed);
+		c.waiting_for_arena = waiting;
+		if (waiting)
+		{
+		}
+	}
+
+	static void close_connection(int fd, int epfd)
+	{
+		auto it = g_conns.find(fd);
+		if (it == g_conns.end())
+			return;
+		Connection& c = it->second;
+		cleanup_connection_requests(c);
+		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
+		::close(fd);
+		log_debug("Closed fd=%d", fd);
+		g_conns.erase(it);
+	}
+
+	static void cleanup_connection_requests(Connection& c)
+	{
+		for (auto& rk : c.requests)
+		{
+			if (rk.second)
+			{
+				if (!(rk.second->flags & Request::RESPONDED))
+					finalize_request(*rk.second);
+				release_request(rk.second);
+			}
+		}
+		c.requests.clear();
 	}
 
 	static void housekeeping_close_idle(int epfd)
@@ -108,6 +192,24 @@ namespace fcgi_conn
 		for (auto& kv : g_conns)
 		{
 			Connection& c = kv.second;
+			if (!c.requests.empty())
+			{
+				struct timespec ts;
+				clock_gettime(CLOCK_MONOTONIC, &ts);
+				double now = ts.tv_sec + ts.tv_nsec / 1e9;
+				for (auto& rk : c.requests)
+				{
+					Request* rp = rk.second;
+					if (!rp)
+						continue;
+					if (!(rp->flags & Request::RESPONDED) && global_config.max_request_time > 0 && (now - rp->start_time_sec) > global_config.max_request_time)
+					{
+						rp->flags |= Request::FAILED;
+						rp->flags |= Request::RESPONDED;
+						fcgi::append_end_request(c.out_buf, rp->id, 0, fcgi::OVERLOADED);
+					}
+				}
+			}
 			if (should_close_connection(c))
 				to_close.push_back(kv.first);
 		}
@@ -117,16 +219,7 @@ namespace fcgi_conn
 			if (it == g_conns.end())
 				continue;
 			Connection& c = it->second;
-			for (auto& rk : c.requests)
-			{
-				if (rk.second)
-				{
-					if (!(rk.second->flags & Request::RESPONDED))
-						finalize_request(*rk.second);
-					release_request(rk.second);
-				}
-			}
-			c.requests.clear();
+			cleanup_connection_requests(c);
 			epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
 			::close(fd);
 			log_debug("Closed fd=%d (housekeeping)", fd);
@@ -137,28 +230,10 @@ namespace fcgi_conn
 	static void finalize_request(Request& req);
 	thread_local Connection* tls_current_connection = nullptr;
 
-	static void internal_on_request_ready(Request& r, std::vector<uint8_t>& out_buf)
+	static void internal_on_request_ready(Request& r)
 	{
-		(void)out_buf; // unused - output assembly now happens on IO thread
 		if (r.flags & Request::RESPONDED)
 			return;
-
-		r.files = DynamicVariable::make_array();
-		parse_endpoint_file(r, r.env.find(global_config.endpoint_file_path));
-		parse_cookie_header(r, r.env.find(global_config.http_cookies_var));
-		parse_query_string(r, r.env.find(global_config.http_query_var));
-		parse_form_data(r);
-		r.session = DynamicVariable::make_object();
-
-		if (global_config.session_auto_load)
-		{
-			DynamicVariable* sid = r.cookies.find(global_config.session_cookie_name);
-			if (sid && sid->type == DynamicVariable::STRING)
-			{
-				session_start(r);
-			}
-		}
-		r.headers["Content-Type"] = global_config.default_content_type;
 
 		Connection* c = static_cast<Connection*>(r.conn_ptr);
 		if (!c)
@@ -167,31 +242,39 @@ namespace fcgi_conn
 		c->active_workers.fetch_add(1, std::memory_order_relaxed);
 		r.worker_active.store(true, std::memory_order_release);
 
-		::global_worker_pool.enqueue([&r, c]
-									 {
-			if (c->closed.load(std::memory_order_relaxed) && c->active_workers.load(std::memory_order_relaxed) == 0)
+		Request* rp_capture = &r;
+		Connection* c_capture = c;
+		::global_worker_pool.enqueue([rp_capture, c_capture] {
+			Request* rp = rp_capture;
+			Connection* cp = c_capture;
+			if (!rp || !cp) return;
+			if (!(rp->flags & Request::RESPONDED) && !cp->closed.load(std::memory_order_relaxed))
 			{
-				r.worker_active.store(false, std::memory_order_release);
-				c->active_workers.fetch_sub(1, std::memory_order_relaxed);
-				return;
-			}
-			
-			if (!(r.flags & Request::RESPONDED))
-			{
-				if (!c->closed.load(std::memory_order_relaxed)) {
-					std::lock_guard<std::mutex> lk(g_pending_output_mutex);
-					g_pending_output.push_back(&r);
-					
-					if (g_eventfd != -1) {
-						uint64_t val = 1;
-						ssize_t ret = write(g_eventfd, &val, sizeof(val));
-						(void)ret; // suppress unused variable warning
+				parse_endpoint_file(*rp, rp->env.find(global_config.endpoint_file_path));
+				parse_cookie_header(*rp, rp->env.find(global_config.http_cookies_var));
+				parse_query_string(*rp, rp->env.find(global_config.http_query_var));
+				parse_form_data(*rp);
+				if (global_config.session_auto_load)
+				{
+					DynamicVariable* sid = rp->cookies.find(global_config.session_cookie_name);
+					if (sid && sid->type == DynamicVariable::STRING)
+					{
+						session_start(*rp);
 					}
 				}
+				rp->headers["Content-Type"] = global_config.default_content_type;
+
+				std::lock_guard<std::mutex> lk(g_pending_output_mutex);
+				g_pending_output.push_back(rp);
+				if (g_eventfd != -1)
+				{
+					uint64_t val = 1;
+					ssize_t wr = write(g_eventfd, &val, sizeof(val));
+					(void)wr; // best-effort wakeup
+				}
 			}
-			
-			r.worker_active.store(false, std::memory_order_release);
-			c->active_workers.fetch_sub(1, std::memory_order_relaxed); });
+			rp->worker_active.store(false, std::memory_order_release);
+			cp->active_workers.fetch_sub(1, std::memory_order_relaxed); });
 	}
 
 	static void log_errno(const char* msg)
@@ -229,16 +312,12 @@ namespace fcgi_conn
 			if (!local_out.empty())
 			{
 				bool was_empty = (c->out_pos == c->out_buf.size());
+				if (was_empty && c->out_buf.capacity() == 0)
+					c->out_buf.reserve(global_config.output_buffer_initial);
 				c->out_buf.insert(c->out_buf.end(), local_out.begin(), local_out.end());
 
 				if (was_empty && g_epfd != -1)
-				{
-					if (!c->want_write_interest)
-					{
-						maybe_update_epoll(*c, g_epfd, EPOLLIN | EPOLLOUT | EPOLLET);
-						c->want_write_interest = true;
-					}
-				}
+					update_write_interest(*c, g_epfd, true);
 			}
 		}
 	}
@@ -258,15 +337,10 @@ namespace fcgi_conn
 	{
 		while (true)
 		{
-			ssize_t n = 0;
 			size_t remaining = c.out_pos < c.out_buf.size() ? (c.out_buf.size() - c.out_pos) : 0;
 			if (remaining == 0)
 			{
-				if (c.want_write_interest)
-				{
-					maybe_update_epoll(c, epfd, EPOLLIN | EPOLLET);
-					c.want_write_interest = false;
-				}
+				update_write_interest(c, epfd, false);
 				if (c.out_pos != 0)
 				{
 					c.out_buf.clear();
@@ -276,19 +350,15 @@ namespace fcgi_conn
 					g_close_queue.push_back(c.fd);
 				return;
 			}
-			n = ::send(c.fd, c.out_buf.data() + c.out_pos, remaining, 0);
+			ssize_t n = ::send(c.fd, c.out_buf.data() + c.out_pos, remaining, 0);
 			if (n > 0)
 			{
 				c.out_pos += (size_t)n;
-				continue; // keep draining
+				continue;
 			}
 			if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
 			{
-				if (!c.want_write_interest)
-				{
-					maybe_update_epoll(c, epfd, EPOLLIN | EPOLLOUT | EPOLLET);
-					c.want_write_interest = true;
-				}
+				update_write_interest(c, epfd, true);
 				return;
 			}
 			if (n <= 0)
@@ -325,7 +395,6 @@ namespace fcgi_conn
 		r->~Request();
 		if (a)
 			global_arena_manager.release(a);
-		// If accept was paused due to no arenas, resume when at least one is free
 		if (g_accept_paused && global_arena_manager.available_count.load(std::memory_order_relaxed) > 0)
 			resume_accept();
 		process_waiting_connections();
@@ -359,6 +428,7 @@ namespace fcgi_conn
 		}
 
 		bool all_responded = true;
+		bool any_keep = false;
 		for (auto& kv : c.requests)
 		{
 			Request* rp = kv.second;
@@ -367,25 +437,18 @@ namespace fcgi_conn
 				all_responded = false;
 				break;
 			}
-		}
-
-		bool any_keep = false;
-		for (auto& kv : c.requests)
-		{
-			Request* rp = kv.second;
-			if (rp && (rp->flags & Request::KEEP_CONNECTION))
+			if (rp->flags & Request::KEEP_CONNECTION)
 			{
 				any_keep = true;
-				break;
+				break; // no need to continue scanning
 			}
 		}
-
 		return all_responded && !any_keep && (c.out_pos == c.out_buf.size()) && c.active_workers.load(std::memory_order_relaxed) == 0;
 	}
 
 	static void init(int listen_fd, RequestReadyCallback cb)
 	{
-		(void)listen_fd; // currently unused; placeholder if future per-socket state needed
+		(void)listen_fd;
 		g_user_request_ready = cb;
 		g_listen_fd = listen_fd;
 		auto& G = global_config;
@@ -395,38 +458,28 @@ namespace fcgi_conn
 
 	static void pause_accept()
 	{
-		if (g_accept_paused || g_epfd == -1 || g_listen_fd == -1)
+		if (g_accept_paused)
 			return;
-		// Remove listen socket from epoll to stop EPOLLIN wakeups.
-		if (epoll_ctl(g_epfd, EPOLL_CTL_DEL, g_listen_fd, nullptr) == -1)
-			log_errno("epoll_ctl DEL listen (pause)");
-		else
+		if (modify_listen_interest(false))
 			log_debug("Paused accept() (no arenas) fd=%d", g_listen_fd);
 		g_accept_paused = true;
 	}
 
 	static void resume_accept()
 	{
-		if (!g_accept_paused || g_epfd == -1 || g_listen_fd == -1)
+		if (!g_accept_paused)
 			return;
-		// Re-add listen socket to epoll interest
-		epoll_event ev{};
-		ev.data.fd = g_listen_fd;
-		ev.events = EPOLLIN | EPOLLET;
-		if (epoll_ctl(g_epfd, EPOLL_CTL_ADD, g_listen_fd, &ev) == -1)
-			log_errno("epoll_ctl ADD listen (resume)");
-		else
+		if (modify_listen_interest(true))
 			log_debug("Resumed accept() fd=%d", g_listen_fd);
 		g_accept_paused = false;
 	}
 
 	static void handle_new_connections(int listen_fd, int epfd)
 	{
-		// If we currently have zero arenas, pause accepting new connections (backpressure at kernel backlog)
 		if (global_arena_manager.available_count.load(std::memory_order_relaxed) == 0)
 		{
 			pause_accept();
-			return; // don't drain accept queue now; keep sockets in kernel backlog
+			return;
 		}
 		while (true)
 		{
@@ -444,15 +497,13 @@ namespace fcgi_conn
 				}
 			}
 			set_non_blocking(cfd);
-				epoll_event cev{};
-				cev.data.fd = cfd;
-				cev.events = EPOLLIN | EPOLLET;
-				epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev);
-				Connection& c = g_conns[cfd];
-				c.fd = cfd;
-				c.out_buf.reserve(global_config.output_buffer_initial);
-				log_debug("Accepted fd=%d", cfd);
-			// If arenas were exhausted after accepting (unlikely but possible due to race), pause further accepts.
+			epoll_event cev{};
+			cev.data.fd = cfd;
+			cev.events = EPOLLIN | EPOLLET;
+			epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev);
+			Connection& c = g_conns[cfd];
+			c.fd = cfd;
+			log_debug("Accepted fd=%d", cfd);
 			if (global_arena_manager.available_count.load(std::memory_order_relaxed) == 0)
 			{
 				pause_accept();
@@ -468,8 +519,6 @@ namespace fcgi_conn
 			return;
 
 		Connection& c = it->second;
-		auto& G = global_config;
-
 		if (events & (EPOLLHUP | EPOLLERR))
 		{
 			c.closed.store(true, std::memory_order_relaxed);
@@ -482,9 +531,7 @@ namespace fcgi_conn
 				uint8_t buf[4096];
 				ssize_t r = ::recv(fd, buf, sizeof(buf), 0);
 				if (r > 0)
-				{
 					c.in_buf.insert(c.in_buf.end(), buf, buf + r);
-				}
 				else if (r == 0)
 				{
 					c.closed.store(true, std::memory_order_relaxed);
@@ -494,44 +541,21 @@ namespace fcgi_conn
 				{
 					if (errno == EAGAIN || errno == EWOULDBLOCK)
 						break;
-					else
-					{
-						log_errno("recv");
-						c.closed.store(true, std::memory_order_relaxed);
-						break;
-					}
-				}
-			}
-
-			if (!c.closed.load(std::memory_order_relaxed))
-			{
-				tls_io_connection = &c;
-				bool waiting_for_arena = false;
-				auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, allocate_request, G.max_params_bytes, G.max_stdin_bytes, internal_on_request_ready, waiting_for_arena);
-				tls_io_connection = nullptr;
-				if (status == fcgi::CLOSE)
+					log_errno("recv");
 					c.closed.store(true, std::memory_order_relaxed);
-				if (waiting_for_arena)
-				{
-					if (!c.waiting_for_arena)
-					{
-						c.waiting_for_arena = true;
-					}
-				}
-				else
-				{
-					c.waiting_for_arena = false;
+					break;
 				}
 			}
-
-			if (c.out_pos != c.out_buf.size())
-				flush_connection(c, epfd);
+			bool prev_wait = c.waiting_for_arena;
+			process_fcgi(c);
+			if (!prev_wait && c.waiting_for_arena)
+				g_waiting_conns.push_back(fd);
+			flush_connection(c, epfd);
 		}
 
 		if (events & EPOLLOUT)
 		{
-			if (!c.out_buf.empty())
-				flush_connection(c, epfd);
+			flush_connection(c, epfd);
 		}
 
 		for (auto it2 = c.requests.begin(); it2 != c.requests.end();)
@@ -564,28 +588,8 @@ namespace fcgi_conn
 			std::vector<int> local;
 			local.swap(g_close_queue);
 			for (int cfd : local)
-			{
-				auto itc = g_conns.find(cfd);
-				if (itc == g_conns.end())
-					continue;
-				Connection& cc = itc->second;
-				if (!should_close_connection(cc))
-					continue;
-				for (auto& rk : cc.requests)
-				{
-					if (rk.second)
-					{
-						if (!(rk.second->flags & Request::RESPONDED))
-							finalize_request(*rk.second);
-						release_request(rk.second);
-					}
-				}
-				cc.requests.clear();
-				epoll_ctl(epfd, EPOLL_CTL_DEL, cfd, nullptr);
-				::close(cfd);
-				log_debug("Closed fd=%d", cfd);
-				g_conns.erase(itc);
-			}
+				if (should_close_connection(g_conns[cfd]))
+					close_connection(cfd, epfd);
 		}
 	}
 
@@ -678,7 +682,6 @@ namespace fcgi_conn
 			}
 		}
 
-		// Add listen socket initially (might be removed later if arenas exhaust)
 		epoll_event ev{};
 		ev.data.fd = listen_fd;
 		ev.events = EPOLLIN | EPOLLET;
@@ -775,15 +778,7 @@ namespace fcgi_conn
 		int rc = run(listen_fd);
 		for (auto& kv : g_conns)
 		{
-			for (auto& rk : kv.second.requests)
-			{
-				if (rk.second)
-				{
-					if (!(rk.second->flags & Request::RESPONDED))
-						finalize_request(*rk.second);
-					release_request(rk.second);
-				}
-			}
+			cleanup_connection_requests(kv.second);
 			::close(kv.first);
 		}
 		g_conns.clear();

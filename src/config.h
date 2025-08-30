@@ -23,6 +23,7 @@ struct GlobalConfig
 	size_t max_params_bytes = 256 * 1024;
 	size_t max_stdin_bytes = 2 * 1024 * 1024;
 	size_t max_memory_per_request = 16 * 1024 * 1024;
+	double max_request_time = 30.0;
 
 	size_t body_preview_limit = 1024;
 	size_t print_env_limit = 0;
@@ -32,7 +33,6 @@ struct GlobalConfig
 	int params_json_depth = -1;
 
 	std::string endpoint_file_path = "SCRIPT_FILENAME";
-
 	std::string default_content_type = "text/plain; charset=utf-8";
 
 	std::string session_cookie_name = "session_id";

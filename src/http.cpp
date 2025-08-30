@@ -8,6 +8,22 @@
 #include <cstdio>
 #include <sstream>
 
+static inline void trim_spaces(std::string& s)
+{
+	while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+		s.erase(s.begin());
+	while (!s.empty() && (s.back() == ' ' || s.back() == '\t'))
+		s.pop_back();
+}
+
+static inline void trim_ascii_ws(std::string& s)
+{
+	while (!s.empty() && (unsigned char)s.front() <= ' ')
+		s.erase(s.begin());
+	while (!s.empty() && (unsigned char)s.back() <= ' ')
+		s.pop_back();
+}
+
 inline int hexval(char c)
 {
 	if (c >= '0' && c <= '9')
@@ -184,12 +200,7 @@ bool extract_files_from_formdata(const std::string& body, const std::string& bou
 				continue;
 			std::string name = line.substr(0, colon);
 			std::string value = line.substr(colon + 1);
-			auto ltrim = [&](std::string& s)
-			{ while(!s.empty() && (s.front()==' '||s.front()=='\t')) s.erase(s.begin()); };
-			auto rtrim = [&](std::string& s)
-			{ while(!s.empty() && (s.back()==' '||s.back()=='\t')) s.pop_back(); };
-			ltrim(value);
-			rtrim(value);
+			trim_spaces(value);
 			for (auto& c : name)
 				c = std::tolower(c);
 			if (name == "content-disposition")
@@ -208,8 +219,7 @@ bool extract_files_from_formdata(const std::string& body, const std::string& bou
 					if (eqp != std::string::npos && eqp < semi_next)
 					{
 						std::string attr = value.substr(p, eqp - p);
-						ltrim(attr);
-						rtrim(attr);
+						trim_spaces(attr);
 						size_t valstart = eqp + 1;
 						while (valstart < semi_next && (value[valstart] == ' ' || value[valstart] == '\t'))
 							++valstart;
@@ -300,14 +310,7 @@ void parse_cookie_header(Request& r, DynamicVariable* cookie_var)
 				semi = cookie_string.size();
 			std::string segment = cookie_string.substr(pos, semi - pos);
 			pos = semi + 1; // advance
-			auto trim = [](std::string& s)
-			{
-				while (!s.empty() && (unsigned char)s.front() <= ' ')
-					s.erase(s.begin());
-				while (!s.empty() && (unsigned char)s.back() <= ' ')
-					s.pop_back();
-			};
-			trim(segment);
+			trim_ascii_ws(segment);
 			if (segment.empty())
 				continue;
 			size_t eq = segment.find('=');
@@ -321,8 +324,8 @@ void parse_cookie_header(Request& r, DynamicVariable* cookie_var)
 			{
 				key = segment.substr(0, eq);
 				value = segment.substr(eq + 1);
-				trim(key);
-				trim(value);
+				trim_ascii_ws(key);
+				trim_ascii_ws(value);
 				if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
 					value = value.substr(1, value.size() - 2);
 			}

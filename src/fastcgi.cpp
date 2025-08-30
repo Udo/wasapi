@@ -1,4 +1,5 @@
 #include "fastcgi.h"
+#include "config.h" // for global_config limits
 #include <cstring>
 #include <arpa/inet.h>
 
@@ -74,10 +75,12 @@ namespace fcgi
 		}
 	}
 
-	ProcessStatus process_buffer(std::vector<uint8_t>& in_buf, std::unordered_map<uint16_t, Request*>& requests, std::vector<uint8_t>& out_buf, Request* (*allocate_request)(uint16_t), size_t max_params_bytes, size_t max_stdin_bytes, void (*on_request_ready)(Request&, std::vector<uint8_t>&), bool& waiting_for_arena)
+	ProcessStatus process_buffer(std::vector<uint8_t>& in_buf, std::unordered_map<uint16_t, Request*>& requests, std::vector<uint8_t>& out_buf, Request* (*allocate_request)(uint16_t), void (*on_request_ready)(Request&), bool& waiting_for_arena)
 	{
 		size_t offset = 0;
 		bool close_needed = false;
+		const size_t max_params_bytes = global_config.max_params_bytes;
+		const size_t max_stdin_bytes = global_config.max_stdin_bytes;
 		while (true)
 		{
 			if (in_buf.size() - offset < sizeof(Header))
@@ -128,7 +131,7 @@ namespace fcgi
 						{
 							waiting_for_arena = true;
 							close_needed = false;
-							goto done; // exit loop keeping entire record intact
+							return close_needed ? CLOSE : OK;
 						}
 					}
 					break;
@@ -220,10 +223,9 @@ namespace fcgi
 				(rptr->flags & Request::PARAMS_COMPLETE) && (rptr->flags & Request::INPUT_COMPLETE))
 			{
 				if (on_request_ready)
-					on_request_ready(*rptr, out_buf);
+					on_request_ready(*rptr);
 			}
 		}
-	done:
 		if (offset)
 			in_buf.erase(in_buf.begin(), in_buf.begin() + offset);
 		return close_needed ? CLOSE : OK;
