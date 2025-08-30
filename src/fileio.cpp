@@ -37,10 +37,13 @@ static inline void remove_entry_unlocked(const std::string& filename)
 static inline void insert_entry_unlocked(const std::string& filename, std::string&& content, time_t mtime)
 {
 	remove_entry_unlocked(filename);
-	total_cache_size += content.size();
-	file_cache[filename] = CachedFile{ std::move(content), mtime, std::chrono::steady_clock::now(), file_cache[filename].size };
-	auto& ref = file_cache[filename];
-	ref.size = ref.content.size();
+	CachedFile cf; // avoid double lookup & temporary default entry
+	cf.mtime = mtime;
+	cf.last_check = std::chrono::steady_clock::now();
+	cf.content = std::move(content);
+	cf.size = cf.content.size();
+	total_cache_size += cf.size;
+	file_cache.emplace(filename, std::move(cf));
 }
 
 static inline void evict_ttl_unlocked()
@@ -84,8 +87,19 @@ static inline void maybe_maintain_unlocked(uint32_t call_count)
 	}
 }
 
-static bool read_file_binary(const std::string& filename, std::string& out)
+static bool read_file_binary(const std::string& filename, std::string& out, size_t known_size = static_cast<size_t>(-1))
 {
+	if (known_size != static_cast<size_t>(-1))
+	{
+		std::ifstream file(filename, std::ios::binary);
+		if (!file)
+			return false;
+		out.resize(known_size);
+		if (known_size > 0)
+			file.read(&out[0], known_size);
+		return static_cast<bool>(file);
+	}
+	// Fallback (size unknown): original method
 	std::ifstream file(filename, std::ios::binary);
 	if (!file)
 		return false;
@@ -122,6 +136,7 @@ std::string read_entire_file_cached(const std::string& filename)
 	if (stat(filename.c_str(), &st) != 0)
 		return ""; // not found or error
 	const time_t new_mtime = st.st_mtime;
+	const size_t file_size = static_cast<size_t>(st.st_size);
 
 	std::string content;
 	{
@@ -139,7 +154,7 @@ std::string read_entire_file_cached(const std::string& filename)
 		}
 	}
 
-	if (!read_file_binary(filename, content))
+	if (!read_file_binary(filename, content, file_size))
 		return "";
 
 	if (content.size() > global_config.file_cache_max_size)
