@@ -12,7 +12,7 @@ struct GlobalConfig
 {
 	uint16_t port = 9000;
 	std::string unix_path;
-	int backlog = 256*16;
+	int backlog = 256 * 16;
 
 	size_t arena_capacity = 256 * 1024;
 	size_t workers = 1;
@@ -36,7 +36,7 @@ struct GlobalConfig
 	std::string default_content_type = "text/plain; charset=utf-8";
 
 	std::string session_cookie_name = "session_id";
-	double session_cookie_lifetime = 60*60*24*30; // 30 days
+	double session_cookie_lifetime = 60 * 60 * 24 * 30; // 30 days
 	std::string session_cookie_path = "/";
 	std::string session_storage_path = "/tmp/sessions";
 	bool session_auto_load = true;
@@ -48,10 +48,9 @@ struct GlobalConfig
 	bool cleanup_temp_on_disconnect = true;
 
 	int log_level = 1;
-	std::string log_destination = "stderr"; 
+	std::string log_destination = "stderr";
 
 	size_t graceful_shutdown_timeout_ms = 5000;
-
 };
 
 extern GlobalConfig global_config;
@@ -60,4 +59,4 @@ bool config_parse_args(int argc, char* argv[], std::vector<std::string>& errors)
 
 bool load_kv_file(const std::string& path, DynamicVariable& out);
 
-#endif 
+#endif

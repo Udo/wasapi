@@ -3,7 +3,6 @@
 #include <string>
 #include <cstdio>
 #include <cstdarg>
-//#include <mutex>
 #include "config.h"
 
 inline FILE* log_destination()

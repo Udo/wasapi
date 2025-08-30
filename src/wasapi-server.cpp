@@ -17,7 +17,6 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
-//#include <algorithm>
 #include <sstream>
 #include "fastcgi.h"
 #include "http.h"
@@ -48,19 +47,28 @@ struct Connection
 	int fd = -1;
 	std::vector<uint8_t> in_buf;
 	std::vector<uint8_t> out_buf;
-	std::unordered_map<uint16_t, Request> requests; 
+	std::unordered_map<uint16_t, Request> requests;
 	bool closed = false;
 };
 
 static void print_any_limited(std::ostringstream& oss, const DynamicVariable& v, size_t limit, int indent, int depth = 0)
 {
-	auto ind = [&](int d){ oss << std::string(d * indent, ' '); };
+	auto ind = [&](int d)
+	{ oss << std::string(d * indent, ' '); };
 	switch (v.type)
 	{
-		case DynamicVariable::NIL: oss << "null\n"; break;
-		case DynamicVariable::STRING: oss << '"' << v.data.s << '"' << "\n"; break;
-		case DynamicVariable::NUMBER: oss << v.data.num << "\n"; break;
-		case DynamicVariable::BOOL: oss << (v.data.b?"true":"false") << "\n"; break;
+		case DynamicVariable::NIL:
+			oss << "null\n";
+			break;
+		case DynamicVariable::STRING:
+			oss << '"' << v.data.s << '"' << "\n";
+			break;
+		case DynamicVariable::NUMBER:
+			oss << v.data.num << "\n";
+			break;
+		case DynamicVariable::BOOL:
+			oss << (v.data.b ? "true" : "false") << "\n";
+			break;
 		case DynamicVariable::ARRAY:
 			oss << "[\n";
 			if (!v.data.a.empty())
@@ -70,14 +78,18 @@ static void print_any_limited(std::ostringstream& oss, const DynamicVariable& v,
 				{
 					if (limit && printed >= limit)
 					{
-						ind(depth+1); oss << "... (truncated)\n"; break;
+						ind(depth + 1);
+						oss << "... (truncated)\n";
+						break;
 					}
-					ind(depth+1);
-					print_any_limited(oss, v.data.a[i], 0, indent, depth+1);
+					ind(depth + 1);
+					print_any_limited(oss, v.data.a[i], 0, indent, depth + 1);
 					++printed;
 				}
 			}
-			ind(depth); oss << "]\n"; break;
+			ind(depth);
+			oss << "]\n";
+			break;
 		case DynamicVariable::OBJECT:
 			oss << "{\n";
 			if (!v.data.o.empty())
@@ -87,14 +99,19 @@ static void print_any_limited(std::ostringstream& oss, const DynamicVariable& v,
 				{
 					if (limit && printed >= limit)
 					{
-						ind(depth+1); oss << "... (truncated)\n"; break;
+						ind(depth + 1);
+						oss << "... (truncated)\n";
+						break;
 					}
-					ind(depth+1); oss << it->first << ": ";
-					print_any_limited(oss, it->second, 0, indent, depth+1); 
+					ind(depth + 1);
+					oss << it->first << ": ";
+					print_any_limited(oss, it->second, 0, indent, depth + 1);
 					++printed;
 				}
 			}
-			ind(depth); oss << "}\n"; break;
+			ind(depth);
+			oss << "}\n";
+			break;
 	}
 }
 
@@ -108,19 +125,21 @@ void parse_cookie_header(Request& r, DynamicVariable* cookie_var)
 		size_t pos = 0;
 		while (pos < cookie_string.size())
 		{
-			// find segment up to ';'
 			size_t semi = cookie_string.find(';', pos);
-			if (semi == std::string::npos) semi = cookie_string.size();
+			if (semi == std::string::npos)
+				semi = cookie_string.size();
 			std::string segment = cookie_string.substr(pos, semi - pos);
 			pos = semi + 1; // advance
-			// trim leading/trailing spaces
 			auto trim = [](std::string& s)
 			{
-				while (!s.empty() && (unsigned char)s.front() <= ' ') s.erase(s.begin());
-				while (!s.empty() && (unsigned char)s.back() <= ' ') s.pop_back();
+				while (!s.empty() && (unsigned char)s.front() <= ' ')
+					s.erase(s.begin());
+				while (!s.empty() && (unsigned char)s.back() <= ' ')
+					s.pop_back();
 			};
 			trim(segment);
-			if (segment.empty()) continue;
+			if (segment.empty())
+				continue;
 			size_t eq = segment.find('=');
 			std::string key;
 			std::string value;
@@ -134,7 +153,6 @@ void parse_cookie_header(Request& r, DynamicVariable* cookie_var)
 				value = segment.substr(eq + 1);
 				trim(key);
 				trim(value);
-				// Remove optional surrounding quotes
 				if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
 					value = value.substr(1, value.size() - 2);
 			}
@@ -186,9 +204,12 @@ void parse_json_form_data(Request& r)
 void parse_multipart_form_data(Request& r)
 {
 	const DynamicVariable* it_ct = r.env.find("CONTENT_TYPE");
-	if (!it_ct || it_ct->type != DynamicVariable::STRING) return;
+	if (!it_ct || it_ct->type != DynamicVariable::STRING)
+		return;
 	std::string ct = it_ct->data.s;
-	std::string lct = ct; for (auto& c : lct) c = std::tolower(c);
+	std::string lct = ct;
+	for (auto& c : lct)
+		c = std::tolower(c);
 	std::string boundary;
 	std::string key = "boundary=";
 	size_t bpos = lct.find(key);
@@ -196,7 +217,8 @@ void parse_multipart_form_data(Request& r)
 		boundary = ct.substr(bpos + key.size());
 	if (!boundary.empty() && boundary.front() == '"' && boundary.back() == '"' && boundary.size() >= 2)
 		boundary = boundary.substr(1, boundary.size() - 2);
-	if (boundary.empty()) return;
+	if (boundary.empty())
+		return;
 	std::unordered_map<std::string, std::string> tmp;
 	extract_files_from_formdata(r.body, boundary, global_config.upload_tmp_dir, tmp, r.files);
 	r.params.type = DynamicVariable::OBJECT;
@@ -219,7 +241,9 @@ void parse_form_data(Request& r)
 	if (!it_ct || it_ct->type != DynamicVariable::STRING)
 		return;
 	std::string ct = it_ct->data.s;
-	std::string lct = ct; for (auto& c : lct) c = std::tolower(c);
+	std::string lct = ct;
+	for (auto& c : lct)
+		c = std::tolower(c);
 	if (lct.find("application/json") != std::string::npos)
 	{
 		parse_json_form_data(r);
@@ -240,7 +264,9 @@ void output_headers(Request& r, std::ostringstream& oss)
 	{
 		if (kv.second.type == DynamicVariable::STRING)
 		{
-			std::string lname = kv.first; for (auto& c : lname) c = std::tolower(c);
+			std::string lname = kv.first;
+			for (auto& c : lname)
+				c = std::tolower(c);
 			oss << kv.first << ": " << kv.second.data.s << "\r\n";
 		}
 		else
@@ -281,7 +307,6 @@ static void on_request_ready(Request& r, std::vector<uint8_t>& out_buf)
 	}
 	r.headers["Content-Type"] = global_config.default_content_type;
 
-	// --------- output ---------
 	std::ostringstream oss;
 	output_headers(r, oss);
 
@@ -505,7 +530,8 @@ static void cleanup_uploaded_files(Connection& c)
 		{
 			for (auto& f : req.files.data.a)
 			{
-				if (f.type != DynamicVariable::OBJECT) continue;
+				if (f.type != DynamicVariable::OBJECT)
+					continue;
 				DynamicVariable* tp = f.find("temp_path");
 				if (!global_config.keep_uploaded_files && tp && tp->type == DynamicVariable::STRING && !tp->data.s.empty())
 				{
@@ -522,7 +548,7 @@ static bool should_close_connection(Connection& c)
 {
 	if (c.closed)
 		return true;
-	
+
 	bool all_responded = true;
 	for (auto& kv : c.requests)
 	{
@@ -532,7 +558,7 @@ static bool should_close_connection(Connection& c)
 			break;
 		}
 	}
-	
+
 	bool any_keep = false;
 	for (auto& kv : c.requests)
 	{
@@ -542,7 +568,7 @@ static bool should_close_connection(Connection& c)
 			break;
 		}
 	}
-	
+
 	return all_responded && !any_keep && c.out_buf.empty();
 }
 
@@ -551,15 +577,15 @@ static void handle_connection_io(int fd, uint32_t events, int epfd, std::unorder
 	auto it = conns.find(fd);
 	if (it == conns.end())
 		return;
-	
+
 	Connection& c = it->second;
 	auto& G = global_config;
-	
+
 	if (events & (EPOLLHUP | EPOLLERR))
 	{
 		c.closed = true;
 	}
-	
+
 	if (events & EPOLLIN)
 	{
 		while (true)
@@ -587,26 +613,26 @@ static void handle_connection_io(int fd, uint32_t events, int epfd, std::unorder
 				}
 			}
 		}
-		
+
 		if (!c.closed)
 		{
 			auto status = fcgi::process_buffer(c.in_buf, c.requests, c.out_buf, G.max_in_flight, G.max_params_bytes, G.max_stdin_bytes, on_request_ready);
 			if (status == fcgi::CLOSE)
 				c.closed = true;
 		}
-		
+
 		if (!c.out_buf.empty())
 			flush_connection(c, epfd);
-		
+
 		cleanup_uploaded_files(c);
 	}
-	
+
 	if (events & EPOLLOUT)
 	{
 		if (!c.out_buf.empty())
 			flush_connection(c, epfd);
 	}
-	
+
 	if (should_close_connection(c))
 	{
 		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
@@ -648,7 +674,7 @@ int main(int argc, char* argv[])
 	int listen_fd = create_listen_socket();
 	if (listen_fd == -1)
 		return 1;
-	
+
 	int epfd = epoll_create1(0);
 	if (epfd == -1)
 	{
@@ -656,7 +682,7 @@ int main(int argc, char* argv[])
 		::close(listen_fd);
 		return 1;
 	}
-	
+
 	epoll_event ev{};
 	ev.data.fd = listen_fd;
 	ev.events = EPOLLIN | EPOLLET;
@@ -667,7 +693,7 @@ int main(int argc, char* argv[])
 		::close(epfd);
 		return 1;
 	}
-	
+
 	auto& G = global_config;
 	log_info("server listening on %s", G.unix_path.empty() ? ("tcp:" + std::to_string(G.port)).c_str() : G.unix_path.c_str());
 
@@ -700,7 +726,7 @@ int main(int argc, char* argv[])
 		{
 			int fd = events[i].data.fd;
 			uint32_t evs = events[i].events;
-			
+
 			if (fd == listen_fd)
 			{
 				handle_new_connections(listen_fd, epfd, conns);

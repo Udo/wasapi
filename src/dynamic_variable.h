@@ -9,16 +9,25 @@
 
 struct DynamicVariable
 {
-	enum Type { NIL, STRING, OBJECT, ARRAY, NUMBER, BOOL } type = NIL;
-	
-	union Data {
+	enum Type
+	{
+		NIL,
+		STRING,
+		OBJECT,
+		ARRAY,
+		NUMBER,
+		BOOL
+	} type = NIL;
+
+	union Data
+	{
 		std::string s;
 		std::unordered_map<std::string, DynamicVariable> o;
 		std::vector<DynamicVariable> a;
 		double num;
 		bool b;
-		
-		Data() : num(0.0) {} 
+
+		Data() : num(0.0) {}
 		~Data() {}
 	} data;
 
@@ -26,7 +35,7 @@ struct DynamicVariable
 	DynamicVariable(const DynamicVariable& other);
 	DynamicVariable(DynamicVariable&& other) noexcept;
 	~DynamicVariable();
-	
+
 	DynamicVariable(const char* lit);
 	DynamicVariable(std::string str);
 	DynamicVariable(double v);
@@ -56,9 +65,9 @@ struct DynamicVariable
 	DynamicVariable* find(std::string key);
 	void push(DynamicVariable v);
 
-	std::string to_string() const; 
-	double to_number(double def_value = 0.0) const; 
-	bool to_bool(bool def_value = false) const; 
+	std::string to_string() const;
+	double to_number(double def_value = 0.0) const;
+	bool to_bool(bool def_value = false) const;
 };
 
 bool parse_json(const std::string& text, DynamicVariable& out, size_t* error_pos = nullptr);

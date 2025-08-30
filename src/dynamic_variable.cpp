@@ -8,12 +8,23 @@ DynamicVariable::DynamicVariable(const DynamicVariable& other) : type(other.type
 {
 	switch (type)
 	{
-		case STRING: new(&data.s) std::string(other.data.s); break;
-		case OBJECT: new(&data.o) std::unordered_map<std::string, DynamicVariable>(other.data.o); break;
-		case ARRAY: new(&data.a) std::vector<DynamicVariable>(other.data.a); break;
-		case NUMBER: data.num = other.data.num; break;
-		case BOOL: data.b = other.data.b; break;
-		case NIL: break;
+		case STRING:
+			new (&data.s) std::string(other.data.s);
+			break;
+		case OBJECT:
+			new (&data.o) std::unordered_map<std::string, DynamicVariable>(other.data.o);
+			break;
+		case ARRAY:
+			new (&data.a) std::vector<DynamicVariable>(other.data.a);
+			break;
+		case NUMBER:
+			data.num = other.data.num;
+			break;
+		case BOOL:
+			data.b = other.data.b;
+			break;
+		case NIL:
+			break;
 	}
 }
 
@@ -21,12 +32,23 @@ DynamicVariable::DynamicVariable(DynamicVariable&& other) noexcept : type(other.
 {
 	switch (type)
 	{
-		case STRING: new(&data.s) std::string(std::move(other.data.s)); break;
-		case OBJECT: new(&data.o) std::unordered_map<std::string, DynamicVariable>(std::move(other.data.o)); break;
-		case ARRAY: new(&data.a) std::vector<DynamicVariable>(std::move(other.data.a)); break;
-		case NUMBER: data.num = other.data.num; break;
-		case BOOL: data.b = other.data.b; break;
-		case NIL: break;
+		case STRING:
+			new (&data.s) std::string(std::move(other.data.s));
+			break;
+		case OBJECT:
+			new (&data.o) std::unordered_map<std::string, DynamicVariable>(std::move(other.data.o));
+			break;
+		case ARRAY:
+			new (&data.a) std::vector<DynamicVariable>(std::move(other.data.a));
+			break;
+		case NUMBER:
+			data.num = other.data.num;
+			break;
+		case BOOL:
+			data.b = other.data.b;
+			break;
+		case NIL:
+			break;
 	}
 	other.type = NIL;
 }
@@ -38,73 +60,74 @@ DynamicVariable::~DynamicVariable()
 
 DynamicVariable::DynamicVariable(const char* lit)
 {
-	if (lit) { 
-		type = STRING; 
-		new(&data.s) std::string(lit);
+	if (lit)
+	{
+		type = STRING;
+		new (&data.s) std::string(lit);
 	}
 }
 
 DynamicVariable::DynamicVariable(std::string str)
 {
-	type = STRING; 
-	new(&data.s) std::string(std::move(str));
+	type = STRING;
+	new (&data.s) std::string(std::move(str));
 }
 
 DynamicVariable::DynamicVariable(double v)
 {
-	type = NUMBER; 
+	type = NUMBER;
 	data.num = v;
 }
 
 DynamicVariable::DynamicVariable(int v)
 {
-	type = NUMBER; 
+	type = NUMBER;
 	data.num = static_cast<double>(v);
 }
 
 DynamicVariable::DynamicVariable(bool v)
 {
-	type = BOOL; 
+	type = BOOL;
 	data.b = v;
 }
 
 DynamicVariable DynamicVariable::make_string(std::string v)
 {
-	DynamicVariable d; 
-	d.type = STRING; 
-	new(&d.data.s) std::string(std::move(v)); 
+	DynamicVariable d;
+	d.type = STRING;
+	new (&d.data.s) std::string(std::move(v));
 	return d;
 }
 
 DynamicVariable DynamicVariable::make_number(double v)
 {
-	DynamicVariable d; 
-	d.type = NUMBER; 
-	d.data.num = v; 
+	DynamicVariable d;
+	d.type = NUMBER;
+	d.data.num = v;
 	return d;
 }
 
 DynamicVariable DynamicVariable::make_bool(bool v)
 {
-	DynamicVariable d; 
-	d.type = BOOL; 
-	d.data.b = v; 
+	DynamicVariable d;
+	d.type = BOOL;
+	d.data.b = v;
 	return d;
 }
 
 DynamicVariable DynamicVariable::make_object()
 {
-	DynamicVariable d; 
-	d.type = OBJECT; 
-	new(&d.data.o) std::unordered_map<std::string, DynamicVariable>(); 
+	DynamicVariable d;
+	d.type = OBJECT;
+	new (&d.data.o) std::unordered_map<std::string, DynamicVariable>();
 	return d;
 }
 
 DynamicVariable DynamicVariable::make_array()
 {
-	DynamicVariable d; 
-	d.type = ARRAY; 
-	new(&d.data.a) std::vector<DynamicVariable>(); 
+	DynamicVariable d;
+	d.type = ARRAY;
+	new (&d.data.a) std::vector<DynamicVariable>();
 	return d;
 }
 
@@ -117,12 +140,19 @@ void DynamicVariable::clear()
 {
 	switch (type)
 	{
-		case STRING: data.s.~basic_string(); break;
-		case OBJECT: data.o.~unordered_map(); break;
-		case ARRAY: data.a.~vector(); break;
+		case STRING:
+			data.s.~basic_string();
+			break;
+		case OBJECT:
+			data.o.~unordered_map();
+			break;
+		case ARRAY:
+			data.a.~vector();
+			break;
 		case NUMBER:
 		case BOOL:
-		case NIL: break;
+		case NIL:
+			break;
 	}
 	type = NIL;
 	data.num = 0.0; // Reset payload
@@ -134,7 +164,7 @@ DynamicVariable& DynamicVariable::operator[](const std::string& key)
 	{
 		clear();
 		type = OBJECT;
-		new(&data.o) std::unordered_map<std::string, DynamicVariable>();
+		new (&data.o) std::unordered_map<std::string, DynamicVariable>();
 	}
 	return data.o[key];
 }
@@ -147,12 +177,23 @@ DynamicVariable& DynamicVariable::operator=(const DynamicVariable& other)
 		type = other.type;
 		switch (type)
 		{
-			case STRING: new(&data.s) std::string(other.data.s); break;
-			case OBJECT: new(&data.o) std::unordered_map<std::string, DynamicVariable>(other.data.o); break;
-			case ARRAY: new(&data.a) std::vector<DynamicVariable>(other.data.a); break;
-			case NUMBER: data.num = other.data.num; break;
-			case BOOL: data.b = other.data.b; break;
-			case NIL: break;
+			case STRING:
+				new (&data.s) std::string(other.data.s);
+				break;
+			case OBJECT:
+				new (&data.o) std::unordered_map<std::string, DynamicVariable>(other.data.o);
+				break;
+			case ARRAY:
+				new (&data.a) std::vector<DynamicVariable>(other.data.a);
+				break;
+			case NUMBER:
+				data.num = other.data.num;
+				break;
+			case BOOL:
+				data.b = other.data.b;
+				break;
+			case NIL:
+				break;
 		}
 	}
 	return *this;
@@ -166,12 +207,23 @@ DynamicVariable& DynamicVariable::operator=(DynamicVariable&& other) noexcept
 		type = other.type;
 		switch (type)
 		{
-			case STRING: new(&data.s) std::string(std::move(other.data.s)); break;
-			case OBJECT: new(&data.o) std::unordered_map<std::string, DynamicVariable>(std::move(other.data.o)); break;
-			case ARRAY: new(&data.a) std::vector<DynamicVariable>(std::move(other.data.a)); break;
-			case NUMBER: data.num = other.data.num; break;
-			case BOOL: data.b = other.data.b; break;
-			case NIL: break;
+			case STRING:
+				new (&data.s) std::string(std::move(other.data.s));
+				break;
+			case OBJECT:
+				new (&data.o) std::unordered_map<std::string, DynamicVariable>(std::move(other.data.o));
+				break;
+			case ARRAY:
+				new (&data.a) std::vector<DynamicVariable>(std::move(other.data.a));
+				break;
+			case NUMBER:
+				data.num = other.data.num;
+				break;
+			case BOOL:
+				data.b = other.data.b;
+				break;
+			case NIL:
+				break;
 		}
 		other.clear();
 	}
@@ -181,56 +233,56 @@ DynamicVariable& DynamicVariable::operator=(DynamicVariable&& other) noexcept
 DynamicVariable& DynamicVariable::operator=(const std::string& str)
 {
 	clear();
-	type = STRING; 
-	new(&data.s) std::string(str); 
+	type = STRING;
+	new (&data.s) std::string(str);
 	return *this;
 }
 
 DynamicVariable& DynamicVariable::operator=(std::string&& str)
 {
 	clear();
-	type = STRING; 
-	new(&data.s) std::string(std::move(str)); 
+	type = STRING;
+	new (&data.s) std::string(std::move(str));
 	return *this;
 }
 
 DynamicVariable& DynamicVariable::operator=(const char* lit)
 {
 	clear();
-	type = STRING; 
-	new(&data.s) std::string(lit ? lit : ""); 
+	type = STRING;
+	new (&data.s) std::string(lit ? lit : "");
 	return *this;
 }
 
 DynamicVariable& DynamicVariable::operator=(double v)
 {
 	clear();
-	type = NUMBER; 
-	data.num = v; 
+	type = NUMBER;
+	data.num = v;
 	return *this;
 }
 
 DynamicVariable& DynamicVariable::operator=(int v)
 {
 	clear();
-	type = NUMBER; 
-	data.num = static_cast<double>(v); 
+	type = NUMBER;
+	data.num = static_cast<double>(v);
 	return *this;
 }
 
 DynamicVariable& DynamicVariable::operator=(bool v)
 {
 	clear();
-	type = BOOL; 
-	data.b = v; 
+	type = BOOL;
+	data.b = v;
 	return *this;
 }
 
 DynamicVariable& DynamicVariable::operator=(std::initializer_list<DynamicVariable> list)
 {
 	clear();
-	type = ARRAY; 
-	new(&data.a) std::vector<DynamicVariable>(list.begin(), list.end()); 
+	type = ARRAY;
+	new (&data.a) std::vector<DynamicVariable>(list.begin(), list.end());
 	return *this;
 }
 
@@ -249,7 +301,7 @@ void DynamicVariable::push(DynamicVariable v)
 		if (type == NIL)
 		{
 			type = ARRAY;
-			new(&data.a) std::vector<DynamicVariable>();
+			new (&data.a) std::vector<DynamicVariable>();
 		}
 		else
 			return;
@@ -261,11 +313,16 @@ std::string DynamicVariable::to_string() const
 {
 	switch (type)
 	{
-		case STRING: return data.s;
-		case NUMBER: return std::to_string(data.num);
-		case BOOL: return data.b ? "true" : "false";
-		case NIL: return "";
-		default: return "";
+		case STRING:
+			return data.s;
+		case NUMBER:
+			return std::to_string(data.num);
+		case BOOL:
+			return data.b ? "true" : "false";
+		case NIL:
+			return "";
+		default:
+			return "";
 	}
 }
 
@@ -276,8 +333,10 @@ double DynamicVariable::to_number(double def_value) const
 
 bool DynamicVariable::to_bool(bool def_value) const
 {
-	if (type == BOOL) return data.b;
-	if (type == NUMBER) return data.num != 0.0;
+	if (type == BOOL)
+		return data.b;
+	if (type == NUMBER)
+		return data.num != 0.0;
 	return def_value;
 }
 
@@ -450,7 +509,7 @@ bool parse_array(JsonCursor& c, DynamicVariable& out)
 	}
 	out.clear();
 	out.type = DynamicVariable::ARRAY;
-	new(&out.data.a) std::vector<DynamicVariable>();
+	new (&out.data.a) std::vector<DynamicVariable>();
 	skip_ws(c);
 	if (match(c, ']'))
 	{
@@ -484,7 +543,7 @@ bool parse_object(JsonCursor& c, DynamicVariable& out)
 	}
 	out.clear();
 	out.type = DynamicVariable::OBJECT;
-	new(&out.data.o) std::unordered_map<std::string, DynamicVariable>();
+	new (&out.data.o) std::unordered_map<std::string, DynamicVariable>();
 	skip_ws(c);
 	if (match(c, '}'))
 	{

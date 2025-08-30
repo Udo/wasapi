@@ -133,8 +133,7 @@ void parse_query_string(const std::string& input, std::unordered_map<std::string
 	}
 }
 
-bool extract_files_from_formdata(const std::string& body, const std::string& boundary, const std::string& upload_dir,
-					 std::unordered_map<std::string, std::string>& form_fields, DynamicVariable& files)
+bool extract_files_from_formdata(const std::string& body, const std::string& boundary, const std::string& upload_dir, std::unordered_map<std::string, std::string>& form_fields, DynamicVariable& files)
 {
 	if (boundary.empty())
 		return false;
@@ -180,7 +179,6 @@ bool extract_files_from_formdata(const std::string& body, const std::string& bou
 				continue;
 			std::string name = line.substr(0, colon);
 			std::string value = line.substr(colon + 1);
-			// trim spaces
 			auto ltrim = [&](std::string& s)
 			{ while(!s.empty() && (s.front()==' '||s.front()=='\t')) s.erase(s.begin()); };
 			auto rtrim = [&](std::string& s)
@@ -191,11 +189,9 @@ bool extract_files_from_formdata(const std::string& body, const std::string& bou
 				c = std::tolower(c);
 			if (name == "content-disposition")
 			{
-				
 				size_t p = 0;
 				while (p < value.size())
 				{
-					// skip token until ; or end
 					size_t sc = value.find(';', p);
 					if (sc == std::string::npos)
 						sc = value.size();
@@ -203,14 +199,12 @@ bool extract_files_from_formdata(const std::string& body, const std::string& bou
 					{ /* form-data token */
 					}
 					size_t semi_next = sc;
-					// process attribute inside segment
 					size_t eqp = value.find('=', p);
 					if (eqp != std::string::npos && eqp < semi_next)
 					{
 						std::string attr = value.substr(p, eqp - p);
 						ltrim(attr);
 						rtrim(attr);
-						// strip quotes
 						size_t valstart = eqp + 1;
 						while (valstart < semi_next && (value[valstart] == ' ' || value[valstart] == '\t'))
 							++valstart;
@@ -252,23 +246,32 @@ bool extract_files_from_formdata(const std::string& body, const std::string& bou
 				size_t written = 0;
 				const char* data_ptr = body.data() + content_start;
 				uint64_t hv = 1469598103934665603ULL;
-				for (size_t i = 0; i < content_len; ++i) { hv ^= (unsigned char)data_ptr[i]; hv *= 1099511628211ULL; }
-				while (written < content_len) {
+				for (size_t i = 0; i < content_len; ++i)
+				{
+					hv ^= (unsigned char)data_ptr[i];
+					hv *= 1099511628211ULL;
+				}
+				while (written < content_len)
+				{
 					ssize_t w = ::write(fd, data_ptr + written, content_len - written);
-					if (w <= 0) break;
+					if (w <= 0)
+						break;
 					written += (size_t)w;
 				}
 				::close(fd);
-				char hash_hex[17]; std::snprintf(hash_hex, sizeof(hash_hex), "%016llx", (unsigned long long)hv);
+				char hash_hex[17];
+				std::snprintf(hash_hex, sizeof(hash_hex), "%016llx", (unsigned long long)hv);
 				DynamicVariable file = DynamicVariable::make_object();
 				file["field_name"] = field_name;
 				file["filename"] = filename;
-				if (!ctype.empty()) file["content_type"] = ctype;
+				if (!ctype.empty())
+					file["content_type"] = ctype;
 				file["temp_path"] = std::string(tmpl.data());
 				file["size"] = (double)written;
 				file["expected_size"] = (double)content_len;
 				file["hash_fnv1a64"] = std::string(hash_hex);
-				if (written != content_len) file["partial"] = true;
+				if (written != content_len)
+					file["partial"] = true;
 				files.push(std::move(file));
 			}
 		}

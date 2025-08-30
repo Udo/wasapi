@@ -11,7 +11,6 @@ std::string url_decode(const std::string& s);
 std::string url_encode(const std::string& s);
 std::string build_query(const std::unordered_map<std::string, std::string>& params);
 
-bool extract_files_from_formdata(const std::string& body, const std::string& boundary, const std::string& upload_dir,
-					 std::unordered_map<std::string, std::string>& form_fields, DynamicVariable& files_out);
+bool extract_files_from_formdata(const std::string& body, const std::string& boundary, const std::string& upload_dir, std::unordered_map<std::string, std::string>& form_fields, DynamicVariable& files_out);
 
 #endif

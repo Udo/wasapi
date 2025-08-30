@@ -165,7 +165,6 @@ namespace fcgi
 					}
 					else
 					{
-						// overflow
 					}
 					break;
 				}
@@ -193,7 +192,6 @@ namespace fcgi
 					}
 					else
 					{
-						// overflow
 					}
 					break;
 				}
@@ -213,8 +211,8 @@ namespace fcgi
 				}
 			}
 			offset += totalLen;
-			if (rptr && !(rptr->flags & Request::FAILED) && !(rptr->flags & Request::RESPONDED) && 
-			    (rptr->flags & Request::PARAMS_COMPLETE) && (rptr->flags & Request::INPUT_COMPLETE))
+			if (rptr && !(rptr->flags & Request::FAILED) && !(rptr->flags & Request::RESPONDED) &&
+				(rptr->flags & Request::PARAMS_COMPLETE) && (rptr->flags & Request::INPUT_COMPLETE))
 			{
 				if (on_request_ready)
 					on_request_ready(*rptr, out_buf);

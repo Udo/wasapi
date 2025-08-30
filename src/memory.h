@@ -10,9 +10,8 @@
 
 #define ARENA_ZERO_CLEAR
 
-struct Arena 
+struct Arena
 {
-
 	uint8_t* data = nullptr;
 	size_t capacity = 0;
 	size_t offset = 0;
@@ -22,8 +21,6 @@ struct Arena
 	Arena(size_t cap);
 	void reset();
 	void* alloc(size_t sz, size_t align = alignof(std::max_align_t));
-
 };
-
 
 #endif
