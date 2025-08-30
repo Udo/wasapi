@@ -35,8 +35,6 @@ static void on_request_ready(Request& r, std::vector<uint8_t>& out_buf)
 	if (r.flags & Request::RESPONDED)
 		return; // already handled
 
-	::usleep(100000); // 100ms debug delay executed in worker thread
-
 	std::ostringstream oss;
 	output_headers(r, oss);
 
