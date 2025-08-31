@@ -145,7 +145,7 @@ int main(int argc, char* argv[])
 	std::thread ws_thread([]()
 						  {
 		register_thread_name("ws");
-		ws::serve(global_config.ws_port, global_config.ws_socket_path, on_request_ready); });
+		ws::serve(global_config.ws_port, global_config.ws_socket_path, on_request_ready, on_request_ready); });
 
 	fcgi_thread.join();
 	ws_thread.join();

@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include "config.h"
 
-extern std::unordered_map<std::thread::id, std::string> thread_names; // defined in logger.cpp
+extern std::unordered_map<std::thread::id, std::string> thread_names;
 
 inline std::mutex& thread_names_mutex()
 {

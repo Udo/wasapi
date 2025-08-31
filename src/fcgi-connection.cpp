@@ -239,6 +239,30 @@ namespace fcgi_conn
 		if (!c)
 			return;
 
+		// Strip fcgi_path_prefix if configured and path starts with it
+		if (!global_config.fcgi_path_prefix.empty()) {
+			DynamicVariable* request_uri_var = r.env.find("REQUEST_URI");
+			DynamicVariable* path_info_var = r.env.find("PATH_INFO");
+			
+			if (request_uri_var && request_uri_var->type == DynamicVariable::STRING) {
+				std::string& request_uri = request_uri_var->data.s;
+				if (request_uri.substr(0, global_config.fcgi_path_prefix.length()) == global_config.fcgi_path_prefix) {
+					std::string stripped_uri = request_uri.substr(global_config.fcgi_path_prefix.length());
+					if (stripped_uri.empty()) stripped_uri = "/";
+					request_uri_var->data.s = stripped_uri;
+				}
+			}
+			
+			if (path_info_var && path_info_var->type == DynamicVariable::STRING) {
+				std::string& path_info = path_info_var->data.s;
+				if (path_info.substr(0, global_config.fcgi_path_prefix.length()) == global_config.fcgi_path_prefix) {
+					std::string stripped_path = path_info.substr(global_config.fcgi_path_prefix.length());
+					if (stripped_path.empty()) stripped_path = "/";
+					path_info_var->data.s = stripped_path;
+				}
+			}
+		}
+
 		c->active_workers.fetch_add(1, std::memory_order_relaxed);
 		r.worker_active.store(true, std::memory_order_release);
 

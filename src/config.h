@@ -12,8 +12,11 @@ struct GlobalConfig
 {
 	uint16_t fcgi_port = 9000;
 	std::string fcgi_socket_path = "";
+	std::string fcgi_path_prefix = "";
+
 	uint16_t ws_port = 9001;
 	std::string ws_socket_path = "";
+	std::string ws_path_prefix = "/ws";
 
 	int backlog = 256 * 16;
 

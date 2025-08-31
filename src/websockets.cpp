@@ -5,6 +5,7 @@
 #include "dynamic_variable.h"
 #include "worker.h"
 #include "http.h"
+#include "fastcgi.h"
 
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -25,12 +26,26 @@
 
 namespace ws
 {
+	// Provide local inline definition to match declaration in http.h (not defined in header)
+	inline void trim_spaces(std::string& s)
+	{
+		while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+		while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+	}
 
 	struct Client
 	{
 		int fd = -1;
 		bool handshake_done = false;
 		std::string in_http;
+		bool http_mode = false; // true if plain HTTP (non-upgrade)
+		bool http_headers_parsed = false;
+		size_t http_content_length = 0;
+		std::string http_method;
+		std::string http_path;
+		std::string http_query;
+		std::unordered_map<std::string, std::string> http_headers; // lowercase keys
+		bool close_after_write = false; // for plain HTTP response
 		std::vector<uint8_t> in_buf;
 		std::vector<uint8_t> out_buf; // guarded by IO thread only; workers queue via pending list
 		std::atomic<bool> closed{ false };
@@ -209,7 +224,125 @@ namespace ws
 		return fd;
 	}
 
-	int serve(int port, const std::string& unix_socket, RequestReadyCallback cb)
+	static void schedule_http(RequestReadyCallback cbhttp, Client& c, std::string&& request_text, std::string&& body)
+	{
+		if (!cbhttp) return;
+		// Build Request analogous to FastCGI-populated request
+		Arena* a = global_arena_manager.get();
+		if (!a) return;
+		void* mem = a->alloc(sizeof(Request), alignof(Request));
+		if (!mem) { global_arena_manager.release(a); return; }
+		Request* r = new (mem) Request(a);
+		r->flags |= Request::INITIALIZED;
+		// Parse request line
+		size_t line_end = request_text.find("\r\n");
+		std::string first_line = line_end == std::string::npos ? request_text : request_text.substr(0, line_end);
+		{
+			size_t msp = first_line.find(' ');
+			if (msp != std::string::npos) {
+				std::string method = first_line.substr(0, msp);
+				size_t psp = first_line.find(' ', msp + 1);
+				std::string target = psp == std::string::npos ? std::string() : first_line.substr(msp + 1, psp - (msp + 1));
+				size_t q = target.find('?');
+				std::string path = q == std::string::npos ? target : target.substr(0, q);
+				std::string query = q == std::string::npos ? std::string() : target.substr(q + 1);
+				
+				// Strip ws_path_prefix if configured and path starts with it
+				std::string stripped_target = target;
+				std::string stripped_path = path;
+				if (!global_config.ws_path_prefix.empty() && 
+					target.substr(0, global_config.ws_path_prefix.length()) == global_config.ws_path_prefix) {
+					stripped_target = target.substr(global_config.ws_path_prefix.length());
+					if (stripped_target.empty()) stripped_target = "/";
+					size_t stripped_q = stripped_target.find('?');
+					stripped_path = stripped_q == std::string::npos ? stripped_target : stripped_target.substr(0, stripped_q);
+				}
+				
+				r->env["REQUEST_METHOD"] = DynamicVariable::make_string(method);
+				r->env["REQUEST_URI"] = DynamicVariable::make_string(stripped_target);
+				r->env["PATH_INFO"] = DynamicVariable::make_string(stripped_path);
+				r->env["QUERY_STRING"] = DynamicVariable::make_string(query);
+			}
+		}
+		// Headers
+		r->env["SERVER_PROTOCOL"] = DynamicVariable::make_string("HTTP/1.1"); // assume
+		std::unordered_map<std::string,std::string> headers;
+		size_t pos = line_end == std::string::npos ? request_text.size() : line_end + 2;
+		while (pos < request_text.size()) {
+			size_t next = request_text.find("\r\n", pos);
+			if (next == std::string::npos) break;
+			if (next == pos) { pos += 2; break; } // end headers
+			std::string line = request_text.substr(pos, next - pos);
+			pos = next + 2;
+			size_t colon = line.find(':');
+			if (colon == std::string::npos) continue;
+			std::string name = line.substr(0, colon);
+			std::string value = line.substr(colon + 1);
+			trim_spaces(value);
+			std::string lname = name; for (auto& ch: lname) ch = std::toupper((unsigned char)ch);
+			std::string env_name = "HTTP_";
+			for (char ch: lname) env_name.push_back(ch == '-' ? '_' : ch);
+			r->env[env_name] = DynamicVariable::make_string(value);
+			headers[name] = value;
+		}
+		// Copy select headers to canonical CGI vars
+		if (auto it = headers.find("Content-Type"); it != headers.end()) r->env["CONTENT_TYPE"] = DynamicVariable::make_string(it->second);
+		if (auto it = headers.find("Content-Length"); it != headers.end()) r->env["CONTENT_LENGTH"] = DynamicVariable::make_string(it->second);
+		// Body
+		r->body = std::move(body);
+		r->body_bytes = r->body.size();
+		r->flags |= Request::PARAMS_COMPLETE | Request::INPUT_COMPLETE; // no streaming for now
+		// Parse query string into params
+		parse_query_string(*r, r->env.find("QUERY_STRING"));
+		// Cookies
+		parse_cookie_header(*r, r->env.find("HTTP_COOKIE"));
+		// Form data (json/multipart/urlencoded)
+		parse_form_data(*r);
+		// Tag origin
+		r->env["WS"] = DynamicVariable::make_string("0");
+		r->env["CLIENT_FD"] = DynamicVariable::make_string(std::to_string(c.fd));
+		::global_worker_pool.enqueue([cbhttp, r, a, fd = c.fd]() {
+			// Worker builds FastCGI-style output into resp_fcgi; we adapt to HTTP
+			std::vector<uint8_t> resp_fcgi;
+			cbhttp(*r, resp_fcgi);
+			// Decode FCGI_STDOUT records to aggregate payload
+			std::string body;
+			const uint8_t* p = resp_fcgi.data();
+			const uint8_t* end = resp_fcgi.data() + resp_fcgi.size();
+			while (end - p >= (ptrdiff_t)sizeof(fcgi::Header)) {
+				fcgi::Header h; std::memcpy(&h, p, sizeof(h));
+				if (h.version != fcgi::VERSION_1) break;
+				size_t contentLen = (size_t)ntohs(h.contentLength);
+				size_t total = sizeof(h) + contentLen + h.paddingLength;
+				if ((size_t)(end - p) < total) break;
+				if (h.type == fcgi::FCGI_STDOUT && contentLen > 0) {
+					body.append(reinterpret_cast<const char*>(p + sizeof(h)), contentLen);
+				}
+				p += total;
+			}
+			// If body contains embedded HTTP headers already from output_headers, leave as-is; otherwise add minimal headers
+			bool has_http_prefix = body.rfind("HTTP/", 0) == 0;
+			std::string payload;
+			if (has_http_prefix) {
+				payload = std::move(body); // already full response
+			} else {
+				std::string ct = "text/plain; charset=utf-8";
+				const DynamicVariable* hct = r->headers.find("Content-Type");
+				if (hct && hct->type == DynamicVariable::STRING) ct = hct->data.s;
+				payload = "HTTP/1.1 200 OK\r\nContent-Type: " + ct + "\r\nContent-Length: " + std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+			}
+			std::vector<uint8_t> frame(payload.begin(), payload.end());
+			{
+				std::lock_guard<std::mutex> lk(g_pending_mutex);
+				g_pending_frames.push_back(PendingFrame{fd, std::move(frame)});
+				if (g_eventfd != -1) { uint64_t v=1; ssize_t wr = write(g_eventfd, &v, sizeof(v)); (void)wr; }
+			}
+			r->~Request();
+			if (a) global_arena_manager.release(a);
+		});
+	}
+
+	int serve(int port, const std::string& unix_socket, RequestReadyCallback cbws, RequestReadyCallback cbhttp)
 	{
 		int listen_fd = -1;
 		if (!unix_socket.empty())
@@ -344,6 +477,7 @@ namespace ws
 						if (hdr_end != std::string::npos)
 						{
 							std::string key, accept_key;
+							bool is_upgrade = false;
 							if (parse_http_headers(c.in_http.substr(0, hdr_end + 4), key, accept_key))
 							{
 								std::string response =
@@ -354,10 +488,58 @@ namespace ws
 									accept_key + "\r\n\r\n";
 								c.out_buf.insert(c.out_buf.end(), response.begin(), response.end());
 								c.handshake_done = true;
+								is_upgrade = true;
 							}
-							else
+							if (!is_upgrade)
 							{
-								c.closed.store(true);
+								// Parse headers to find Content-Length
+								c.http_mode = true;
+								std::string headers_part = c.in_http.substr(0, hdr_end + 4);
+								size_t line_end = headers_part.find("\r\n");
+								if (line_end == std::string::npos) { c.closed.store(true); continue; }
+								// Find content-length manually
+								size_t hpos = 0;
+								while (true) {
+									size_t lend = headers_part.find("\r\n", hpos);
+									if (lend == std::string::npos || lend == hpos) break;
+									std::string line = headers_part.substr(hpos, lend - hpos);
+									hpos = lend + 2;
+									size_t colon = line.find(':');
+									if (colon != std::string::npos) {
+										std::string name = line.substr(0, colon);
+										for (auto &ch: name) ch = std::tolower((unsigned char)ch);
+										if (name == "content-length") {
+											std::string val = line.substr(colon+1); trim_spaces(val); c.http_content_length = (size_t)std::strtoull(val.c_str(), nullptr, 10); break; }
+									}
+								}
+								c.http_headers_parsed = true;
+								// Move any body bytes already read (after headers) into in_buf
+								size_t already = c.in_http.size() - (hdr_end + 4);
+								if (already) {
+									std::string tail = c.in_http.substr(hdr_end + 4);
+									c.in_buf.insert(c.in_buf.end(), tail.begin(), tail.end());
+								}
+								// If full body present (or none expected) schedule immediately
+								if (c.in_buf.size() >= c.http_content_length) {
+									std::string body;
+									if (c.http_content_length) body.assign((char*)c.in_buf.data(), c.http_content_length);
+									schedule_http(cbhttp, c, std::move(c.in_http), std::move(body));
+									c.in_buf.clear();
+									// close deferred via close_after_write
+								}
+							}
+						}
+						else if (c.http_mode && c.http_headers_parsed)
+						{
+							// Accumulate until content-length reached
+							if (c.in_buf.size() >= c.http_content_length)
+							{
+								std::string body;
+								if (c.http_content_length)
+									body.assign((char*)c.in_buf.data(), c.http_content_length);
+								schedule_http(cbhttp, c, std::move(c.in_http), std::move(body));
+								c.in_buf.clear();
+								// close deferred via close_after_write
 							}
 						}
 					}
@@ -421,7 +603,7 @@ namespace ws
 								}
 								if (fin)
 								{
-									schedule_message(cb, c, opcode, std::move(payload));
+									schedule_message(cbws, c, opcode, std::move(payload));
 								}
 								else
 								{
@@ -445,7 +627,7 @@ namespace ws
 										std::vector<uint8_t> complete;
 										complete.swap(c.assemble_data);
 										c.assembling = false;
-										schedule_message(cb, c, final_opcode, std::move(complete));
+										schedule_message(cbws, c, final_opcode, std::move(complete));
 									}
 								}
 							}
@@ -472,7 +654,7 @@ namespace ws
 					mod.events = EPOLLIN | EPOLLOUT | EPOLLET;
 					epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &mod);
 				}
-				if (c.closed.load())
+				if (c.closed.load() || (c.close_after_write && c.out_buf.empty()))
 				{
 					epoll_ctl(epfd, EPOLL_CTL_DEL, fd, nullptr);
 					::close(fd);

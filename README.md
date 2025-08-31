@@ -5,56 +5,38 @@
 - CMake 3.16 or higher
 - C++17 compatible compiler (GCC, Clang, MSVC)
 
-## Building the Project
-
-### Debug Build
+## Building it
 
 ```bash
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-cmake --build .
+   ./build.sh
 ```
 
-### Release Build
+## Starting it
 
 ```bash
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build .
+   # start a FastCGI listener on /run/wasapi.sock and a WS/HTTP server on port 9001
+   bin/wasapi-server --fcgi-socket /run/wasapi.sock --ws-port 9001
 ```
 
-### Clean Build
+## Nginx frontend server config
 
-```bash
-rm -rf build
-mkdir build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build .
+```nginx
+   // FastCGI config
+   location ~ \.endpoint$ {
+      include snippets/fastcgi-php.conf;
+      fastcgi_param  SCRIPT_FILENAME  /Code/$host_direct/$fastcgi_script_name;
+      fastcgi_pass unix:/run/wasapi.sock;
+   }
+   // WebSockets & plain HTTP CGI config
+   map $http_upgrade $connection_upgrade {
+      default upgrade;
+      ''      close;
+   }
+   location ^~ /ws/ {
+      proxy_pass http://127.0.0.1:9001;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+   }
+
 ```
-
-## Running the Application
-
-After building, the executable will be in the `bin/` directory:
-
-```bash
-./bin/main
-```
-
-## Adding New Source Files
-
-1. Add your `.cpp` and `.hpp` files to the `src/` directory
-2. Update `src/CMakeLists.txt` if you need to:
-   - Add new executables
-   - Create libraries
-   - Link additional libraries
-3. Rebuild the project
-
-## Project Configuration
-
-The CMake configuration:
-- Uses C++17 standard
-- Outputs binaries to `bin/` directory
-- Uses `build/` for intermediate files
-- Includes compiler warnings (`-Wall -Wextra`)
-- Supports both Debug and Release builds

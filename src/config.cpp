@@ -60,6 +60,10 @@ bool config_parse_args(int argc, char* argv[], std::vector<std::string>& errors)
 			 { global_config.log_level = std::stoi(v); } },
 		Opt{ "--log-dest", true, [](const char* v)
 			 { global_config.log_destination = v; } },
+		Opt{ "--ws-path-prefix", true, [](const char* v)
+			 { global_config.ws_path_prefix = v; } },
+		Opt{ "--fcgi-path-prefix", true, [](const char* v)
+			 { global_config.fcgi_path_prefix = v; } },
 		Opt{ "--help", false, [](const char*) {} },
 	};
 	auto find_opt = [&](const std::string& a) -> Opt*

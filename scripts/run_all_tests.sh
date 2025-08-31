@@ -2,7 +2,7 @@
 # Run all curl-based tests against a base URL (server must already be running)
 # Usage: ./run_all_tests.sh [URL] [PATH]
 set -euo pipefail
-BASE_URL=${1:-${TEST_URL:-http://127.0.0.1}}
+BASE_URL=${1:-${TEST_URL:-http://localhost/web/wasapi/examples/demo.endpoint}}
 REQ_PATH=${2:-}
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
