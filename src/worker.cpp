@@ -1,4 +1,5 @@
 #include "worker.h"
+#include "logger.h"
 
 WorkerPool global_worker_pool;
 
@@ -18,8 +19,10 @@ void WorkerPool::start(size_t thread_count)
 	threads.reserve(thread_count);
 	for (size_t i = 0; i < thread_count; ++i)
 	{
-		threads.emplace_back([this]
-							 { run(); });
+		threads.emplace_back([this, i]
+							 {
+			register_thread_name(std::string("worker-") + std::to_string(i));
+			run(); });
 	}
 }
 
