@@ -454,7 +454,7 @@ namespace fcgi_conn
 		g_listen_fd = listen_fd;
 		auto& G = global_config;
 		std::string addr = G.fcgi_socket_path.empty() ? (std::string("tcp:") + std::to_string(G.fcgi_port)) : G.fcgi_socket_path;
-		log_info("fastCGI server listening on %s", addr.c_str());
+		log_info("FastCGI server listening on %s", addr.c_str());
 	}
 
 	static void pause_accept()
@@ -772,14 +772,11 @@ namespace fcgi_conn
 
 	int serve(int port, const std::string& unix_socket, RequestReadyCallback cb)
 	{
-		// Override global_config temporarily for listener creation (non-thread-safe config mutating avoided by local copy of needed fields)
 		uint16_t saved_port = global_config.fcgi_port;
 		std::string saved_path = global_config.fcgi_socket_path;
-		// Set globals used by create_listen_socket() path
 		global_config.fcgi_port = (uint16_t)port;
 		global_config.fcgi_socket_path = unix_socket;
 		int listen_fd = create_listen_socket();
-		// restore
 		global_config.fcgi_port = saved_port;
 		global_config.fcgi_socket_path = saved_path;
 		if (listen_fd == -1)

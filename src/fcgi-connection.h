@@ -10,11 +10,11 @@
 
 struct epoll_event;
 
-	namespace fcgi_conn
-	{
-		using RequestReadyCallback = void (*)(Request&, std::vector<uint8_t>& out_buf);
+namespace fcgi_conn
+{
+	using RequestReadyCallback = void (*)(Request&, std::vector<uint8_t>& out_buf);
 
-		int serve(int port, const std::string& unix_socket, RequestReadyCallback cb);
-	}
+	int serve(int port, const std::string& unix_socket, RequestReadyCallback cb);
+}
 
 #endif // FCGI_CONNECTION_H

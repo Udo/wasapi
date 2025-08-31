@@ -6,7 +6,11 @@
 #include <mutex>
 #include "config.h"
 
-inline std::mutex& log_mutex() { static std::mutex m; return m; }
+inline std::mutex& log_mutex()
+{
+	static std::mutex m;
+	return m;
+}
 inline FILE* log_destination_unsafe_init()
 {
 	static FILE* f = nullptr;

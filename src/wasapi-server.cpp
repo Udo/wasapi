@@ -137,8 +137,10 @@ int main(int argc, char* argv[])
 	global_arena_manager.create_arenas(global_config.max_in_flight, global_config.arena_capacity);
 	global_worker_pool.start(global_config.max_in_flight);
 
-	std::thread fcgi_thread([](){ fcgi_conn::serve(global_config.fcgi_port, global_config.fcgi_socket_path, on_request_ready); });
-	std::thread ws_thread([](){ ws::serve(global_config.ws_port, global_config.ws_socket_path, on_request_ready); });
+	std::thread fcgi_thread([]()
+							{ fcgi_conn::serve(global_config.fcgi_port, global_config.fcgi_socket_path, on_request_ready); });
+	std::thread ws_thread([]()
+						  { ws::serve(global_config.ws_port, global_config.ws_socket_path, on_request_ready); });
 
 	fcgi_thread.join();
 	ws_thread.join();

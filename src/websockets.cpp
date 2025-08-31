@@ -190,11 +190,21 @@ namespace ws
 	{
 		::unlink(path.c_str());
 		int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-		if (fd == -1) return -1;
-		sockaddr_un addr{}; addr.sun_family = AF_UNIX;
+		if (fd == -1)
+			return -1;
+		sockaddr_un addr{};
+		addr.sun_family = AF_UNIX;
 		std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path.c_str());
-		if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) == -1) { ::close(fd); return -1; }
-		if (::listen(fd, 128) == -1) { ::close(fd); return -1; }
+		if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) == -1)
+		{
+			::close(fd);
+			return -1;
+		}
+		if (::listen(fd, 128) == -1)
+		{
+			::close(fd);
+			return -1;
+		}
 		set_non_block(fd);
 		return fd;
 	}
@@ -202,8 +212,10 @@ namespace ws
 	int serve(int port, const std::string& unix_socket, RequestReadyCallback cb)
 	{
 		int listen_fd = -1;
-		if (!unix_socket.empty()) listen_fd = create_unix_listen_socket(unix_socket);
-		else listen_fd = create_listen_socket(port);
+		if (!unix_socket.empty())
+			listen_fd = create_unix_listen_socket(unix_socket);
+		else
+			listen_fd = create_listen_socket(port);
 		if (listen_fd == -1)
 		{
 			log_error("websocket listen failed");
@@ -251,7 +263,8 @@ namespace ws
 				{
 					while (true)
 					{
-						sockaddr_storage addr; socklen_t alen = sizeof(addr);
+						sockaddr_storage addr;
+						socklen_t alen = sizeof(addr);
 						int cfd = ::accept(listen_fd, (sockaddr*)&addr, &alen);
 						if (cfd == -1)
 						{
