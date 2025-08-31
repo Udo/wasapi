@@ -20,10 +20,14 @@ bool config_parse_args(int argc, char* argv[], std::vector<std::string>& errors)
 		std::function<void(const char*)> apply;
 	};
 	std::vector<Opt> opts = {
-		Opt{ "--port", true, [](const char* v)
-			 { global_config.port = (uint16_t)std::stoi(v); } },
-		Opt{ "--unix", true, [](const char* v)
-			 { global_config.unix_path = v; } },
+		Opt{ "--fcgi-port", true, [](const char* v)
+			 { global_config.fcgi_port = (uint16_t)std::stoi(v); } },
+		Opt{ "--fcgi-socket", true, [](const char* v)
+			 { global_config.fcgi_socket_path = v; } },
+		Opt{ "--ws-port", true, [](const char* v)
+			 { global_config.ws_port = (uint16_t)std::stoi(v); } },
+		Opt{ "--ws-socket", true, [](const char* v)
+			 { global_config.ws_socket_path = v; } },
 		Opt{ "--backlog", true, [](const char* v)
 			 { global_config.backlog = std::stoi(v); } },
 		Opt{ "--max-in-flight", true, [](const char* v)

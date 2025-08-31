@@ -10,8 +10,11 @@
 
 struct GlobalConfig
 {
-	uint16_t port = 9000;
-	std::string unix_path;
+	uint16_t fcgi_port = 9000;
+	std::string fcgi_socket_path = "";
+	uint16_t ws_port = 9001;
+	std::string ws_socket_path = "";
+
 	int backlog = 256 * 16;
 
 	size_t arena_capacity = 256 * 1024;

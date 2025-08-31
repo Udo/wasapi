@@ -18,6 +18,7 @@
 #include <vector>
 #include <unordered_map>
 #include <sstream>
+#include <thread>
 #include "fastcgi.h"
 #include "http.h"
 #include "config.h"
@@ -28,6 +29,7 @@
 #include <functional>
 
 #include "fcgi-connection.h"
+#include "websockets.h"
 #include "worker.h"
 
 static void on_request_ready(Request& r, std::vector<uint8_t>& out_buf)
@@ -94,8 +96,10 @@ static void usage(const char* prog)
 {
 	std::fprintf(stderr, "Usage: %s [options]\n\n"
 						 "Options:\n"
-						 "  --port N                TCP port (default 9000)\n"
-						 "  --unix PATH             UNIX socket path instead of TCP\n",
+						 "  --fcgi-port N                TCP port (default 9000)\n"
+						 "  --fcgi-socket PATH           alt. UNIX socket path for FastCGI\n"
+						 "  --ws-port N                  WebSocket port (default 9001)\n"
+						 "  --ws-socket PATH             alt. UNIX socket path for WebSocket\n",
 				 prog);
 }
 
@@ -132,5 +136,11 @@ int main(int argc, char* argv[])
 
 	global_arena_manager.create_arenas(global_config.max_in_flight, global_config.arena_capacity);
 	global_worker_pool.start(global_config.max_in_flight);
-	return fcgi_conn::serve(on_request_ready);
+
+	std::thread fcgi_thread([](){ fcgi_conn::serve(global_config.fcgi_port, global_config.fcgi_socket_path, on_request_ready); });
+	std::thread ws_thread([](){ ws::serve(global_config.ws_port, global_config.ws_socket_path, on_request_ready); });
+
+	fcgi_thread.join();
+	ws_thread.join();
+	return 0;
 }

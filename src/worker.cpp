@@ -25,7 +25,6 @@ void WorkerPool::start(size_t thread_count)
 
 bool WorkerPool::enqueue(Task t)
 {
-	// std::unique_lock<std::mutex> lock(mtx); // might be okay since we're not submitting from threads?
 	if (stopping)
 		return false;
 	q.push(std::move(t));

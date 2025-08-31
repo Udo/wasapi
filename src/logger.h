@@ -3,9 +3,11 @@
 #include <string>
 #include <cstdio>
 #include <cstdarg>
+#include <mutex>
 #include "config.h"
 
-inline FILE* log_destination()
+inline std::mutex& log_mutex() { static std::mutex m; return m; }
+inline FILE* log_destination_unsafe_init()
 {
 	static FILE* f = nullptr;
 	static bool init = false;
@@ -24,10 +26,15 @@ inline FILE* log_destination()
 	}
 	return f ? f : stderr;
 }
+inline FILE* log_destination()
+{
+	return log_destination_unsafe_init(); // call only while holding log_mutex
+}
 inline void log(int level, const char* fmt, ...)
 {
 	if (level > global_config.log_level)
 		return;
+	std::lock_guard<std::mutex> lk(log_mutex());
 	FILE* out = log_destination();
 	va_list ap;
 	va_start(ap, fmt);
@@ -39,6 +46,7 @@ inline void log_error(const char* fmt, ...)
 {
 	if (0 > global_config.log_level)
 		return; // always allow >=0
+	std::lock_guard<std::mutex> lk(log_mutex());
 	FILE* out = log_destination();
 	va_list ap;
 	va_start(ap, fmt);
@@ -51,6 +59,7 @@ inline void log_info(const char* fmt, ...)
 {
 	if (1 > global_config.log_level)
 		return;
+	std::lock_guard<std::mutex> lk(log_mutex());
 	FILE* out = log_destination();
 	va_list ap;
 	va_start(ap, fmt);
@@ -63,6 +72,7 @@ inline void log_debug(const char* fmt, ...)
 {
 	if (2 > global_config.log_level)
 		return;
+	std::lock_guard<std::mutex> lk(log_mutex());
 	FILE* out = log_destination();
 	va_list ap;
 	va_start(ap, fmt);

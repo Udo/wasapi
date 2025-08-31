@@ -244,7 +244,8 @@ namespace fcgi_conn
 
 		Request* rp_capture = &r;
 		Connection* c_capture = c;
-		::global_worker_pool.enqueue([rp_capture, c_capture] {
+		::global_worker_pool.enqueue([rp_capture, c_capture]
+									 {
 			Request* rp = rp_capture;
 			Connection* cp = c_capture;
 			if (!rp || !cp) return;
@@ -452,8 +453,8 @@ namespace fcgi_conn
 		g_user_request_ready = cb;
 		g_listen_fd = listen_fd;
 		auto& G = global_config;
-		std::string addr = G.unix_path.empty() ? (std::string("tcp:") + std::to_string(G.port)) : G.unix_path;
-		log_info("server listening on %s", addr.c_str());
+		std::string addr = G.fcgi_socket_path.empty() ? (std::string("tcp:") + std::to_string(G.fcgi_port)) : G.fcgi_socket_path;
+		log_info("fastCGI server listening on %s", addr.c_str());
 	}
 
 	static void pause_accept()
@@ -596,9 +597,9 @@ namespace fcgi_conn
 	static int create_listen_socket()
 	{
 		int fd;
-		if (!global_config.unix_path.empty())
+		if (!global_config.fcgi_socket_path.empty())
 		{
-			::unlink(global_config.unix_path.c_str());
+			::unlink(global_config.fcgi_socket_path.c_str());
 			fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
 			if (fd == -1)
 			{
@@ -608,7 +609,7 @@ namespace fcgi_conn
 			mode_t old_umask = umask(0);
 			sockaddr_un addr{};
 			addr.sun_family = AF_UNIX;
-			std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", global_config.unix_path.c_str());
+			std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", global_config.fcgi_socket_path.c_str());
 			if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1)
 			{
 				log_errno("bind unix");
@@ -617,7 +618,7 @@ namespace fcgi_conn
 				return -1;
 			}
 			umask(old_umask);
-			if (::chmod(global_config.unix_path.c_str(), 0777) == -1)
+			if (::chmod(global_config.fcgi_socket_path.c_str(), 0777) == -1)
 			{
 				log_errno("chmod unix socket (continuing despite error)");
 			}
@@ -635,7 +636,7 @@ namespace fcgi_conn
 			sockaddr_in addr{};
 			addr.sin_family = AF_INET;
 			addr.sin_addr.s_addr = htonl(INADDR_ANY);
-			addr.sin_port = htons(global_config.port);
+			addr.sin_port = htons(global_config.fcgi_port);
 			if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1)
 			{
 				log_errno("bind inet");
@@ -769,9 +770,18 @@ namespace fcgi_conn
 		return 0;
 	}
 
-	int serve(RequestReadyCallback cb)
+	int serve(int port, const std::string& unix_socket, RequestReadyCallback cb)
 	{
+		// Override global_config temporarily for listener creation (non-thread-safe config mutating avoided by local copy of needed fields)
+		uint16_t saved_port = global_config.fcgi_port;
+		std::string saved_path = global_config.fcgi_socket_path;
+		// Set globals used by create_listen_socket() path
+		global_config.fcgi_port = (uint16_t)port;
+		global_config.fcgi_socket_path = unix_socket;
 		int listen_fd = create_listen_socket();
+		// restore
+		global_config.fcgi_port = saved_port;
+		global_config.fcgi_socket_path = saved_path;
 		if (listen_fd == -1)
 			return 1;
 		init(listen_fd, cb);
@@ -783,8 +793,8 @@ namespace fcgi_conn
 		}
 		g_conns.clear();
 		::close(listen_fd);
-		if (!global_config.unix_path.empty())
-			::unlink(global_config.unix_path.c_str());
+		if (!unix_socket.empty())
+			::unlink(unix_socket.c_str());
 		return rc;
 	}
 }

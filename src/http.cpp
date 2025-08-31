@@ -8,7 +8,33 @@
 #include <cstdio>
 #include <sstream>
 
-static inline void trim_spaces(std::string& s)
+std::string base64_encode(const uint8_t* data, size_t len)
+{
+	static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	std::string out;
+	out.reserve(((len + 2) / 3) * 4);
+	for (size_t i = 0; i < len; i += 3)
+	{
+		uint32_t v = data[i] << 16;
+		if (i + 1 < len)
+			v |= data[i + 1] << 8;
+		if (i + 2 < len)
+			v |= data[i + 2];
+		out.push_back(tbl[(v >> 18) & 63]);
+		out.push_back(tbl[(v >> 12) & 63]);
+		if (i + 1 < len)
+			out.push_back(tbl[(v >> 6) & 63]);
+		else
+			out.push_back('=');
+		if (i + 2 < len)
+			out.push_back(tbl[v & 63]);
+		else
+			out.push_back('=');
+	}
+	return out;
+}
+
+inline void trim_spaces(std::string& s)
 {
 	while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
 		s.erase(s.begin());

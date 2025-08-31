@@ -23,4 +23,8 @@ void parse_form_data(Request& r);
 void output_headers(Request& r, std::ostringstream& oss);
 void parse_endpoint_file(Request& r, DynamicVariable* file_path);
 
+std::string base64_encode(const uint8_t* data, size_t len);
+inline void trim_spaces(std::string& s);
+inline int hexval(char c);
+
 #endif

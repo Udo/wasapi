@@ -4,11 +4,12 @@
 file(GLOB_RECURSE SOURCES "*.cpp" "*.c")
 file(GLOB_RECURSE HEADERS "*.h" "*.hpp")
 
-add_executable(wasapi-server wasapi-server.cpp fastcgi.cpp fcgi-connection.cpp http.cpp dynamic_variable.cpp memory.cpp config.cpp session.cpp request.cpp fileio.cpp worker.cpp)
+add_executable(wasapi-server wasapi-server.cpp fastcgi.cpp fcgi-connection.cpp http.cpp dynamic_variable.cpp memory.cpp config.cpp session.cpp request.cpp fileio.cpp worker.cpp websockets.cpp)
 
 target_compile_definitions(wasapi-server PRIVATE _GNU_SOURCE)
 find_package(Threads REQUIRED)
-target_link_libraries(wasapi-server PRIVATE Threads::Threads)
+find_package(OpenSSL REQUIRED)
+target_link_libraries(wasapi-server PRIVATE Threads::Threads OpenSSL::Crypto)
 
 # If you have additional libraries or modules, you can add them here
 # Example:
